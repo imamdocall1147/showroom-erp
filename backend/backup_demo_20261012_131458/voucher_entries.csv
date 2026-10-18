@@ -1,0 +1,5 @@
+﻿id,voucher_id,account_id,debit,credit,party_id
+1,1,1,37800,0,
+2,1,6,0,37800,
+3,2,1,0,0,
+4,2,6,0,0,

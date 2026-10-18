@@ -1,0 +1,3 @@
+﻿id,customer_id,product_id,color,agreed_price,order_date,expected_delivery_date,status,notes,unit_id,created_at,branch_id
+1,2,1,green,285000,2026-10-04 17:07:48.499269,,delivered,10,18,2026-10-04 17:07:48.499289,1
+2,2,3,,20,2026-10-08 07:18:50.575652,,cancelled,,,2026-10-08 07:18:50.575656,1

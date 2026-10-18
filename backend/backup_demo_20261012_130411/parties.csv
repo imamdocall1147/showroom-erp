@@ -1,0 +1,6 @@
+﻿id,name,party_type,phone,address,area_id,created_at
+1,Karim Motors,customer,01812345678,"Pahartali, Chattogram",1,2026-09-03 04:16:24.927715
+2,sobuj,customer,0101010,chotopool,,2026-09-05 07:22:56.839648
+3,Rahim Traders,supplier,01912345678,,,2026-09-19 04:46:19.430553
+4,Rahim Traders,supplier,01912345678,,,2026-09-19 04:53:27.201825
+5,runner auto mobiles plc,supplier,,,,2026-10-08 05:25:09.099949

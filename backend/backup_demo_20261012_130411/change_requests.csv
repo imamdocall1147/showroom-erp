@@ -1,0 +1,2 @@
+﻿id,entity,action,target_id,summary,payload,status,requested_by,requested_by_name,requested_at,decided_by_name,decided_at,decision_note
+1,warehouse,update,1,গোডাউন এডিট: Main Warehouse,"{""branch_id"": 2, ""name"": ""sb corporation"", ""location"": ""Chattogram""}",rejected,2,rohim,2026-10-05 11:07:44.522181,admin,2026-10-05 11:08:34.131814,
