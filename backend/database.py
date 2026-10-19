@@ -1,18 +1,17 @@
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from dotenv import load_dotenv
 import os
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker, declarative_base
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-# যদি Render থেকে আসা ইউআরএল শুধু postgresql:// দিয়ে শুরু হয়, তবে তা স্বয়ংক্রিয়ভাবে psycopg2 ড্রাইভার যুক্ত করে নেবে
-if DATABASE_URL and DATABASE_URL.startswith("postgresql://"):
-   DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
+# Render এর postgres:// URL কে SQLAlchemy এর জন্য ঠিক করা
+if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
+engine = create_engine(DATABASE_URL)
+SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+Base = declarative_base()
 
-load_dotenv()
-
-SessionLocal = sessionmaker(bind=engine)
 
 def get_db():
     db = SessionLocal()
