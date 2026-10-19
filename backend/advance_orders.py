@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from database import get_db
+from backend.database import get_db
 from models import (
     Account, AdvanceOrder, AdvancePayment, Brand, Party, Product, Unit,
     Voucher, VoucherEntry,
