@@ -1,0 +1,183 @@
+﻿import 'dart:convert';
+import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'main.dart' show apiBaseUrl;
+
+class BranchScreen extends StatefulWidget {
+  final String token;
+  const BranchScreen({super.key, required this.token});
+
+  @override
+  State<BranchScreen> createState() => _BranchScreenState();
+}
+
+class _BranchScreenState extends State<BranchScreen> {
+  List<dynamic> _list = [];
+  bool _loading = true;
+  String? _error;
+
+  Map<String, String> get _headers => {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer ${widget.token}",
+      };
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  String _detail(http.Response r) {
+    try {
+      final d = jsonDecode(utf8.decode(r.bodyBytes));
+      if (d is Map && d["detail"] != null) return "${d["detail"]}";
+    } catch (_) {}
+    return "ত্রুটি (${r.statusCode})";
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final r = await http.get(Uri.parse("$apiBaseUrl/branches"), headers: _headers);
+      if (r.statusCode == 200) {
+        _list = jsonDecode(utf8.decode(r.bodyBytes));
+      } else {
+        _error = _detail(r);
+      }
+    } catch (_) {
+      _error = "সার্ভারের সাথে সংযোগ করা যায়নি";
+    }
+    if (mounted) setState(() => _loading = false);
+  }
+
+  void _msg(String text, {bool bad = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(text), backgroundColor: bad ? Colors.red : Colors.green),
+    );
+  }
+
+  Future<void> _openDialog({Map<String, dynamic>? branch}) async {
+    final nameCtrl = TextEditingController(text: branch?["name"] ?? "");
+    final addrCtrl = TextEditingController(text: branch?["address"] ?? "");
+    final phoneCtrl = TextEditingController(text: branch?["phone"] ?? "");
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(branch == null ? "নতুন শোরুম যোগ করুন" : "শোরুম সম্পাদনা"),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: nameCtrl,
+                autofocus: true,
+                decoration: const InputDecoration(labelText: "শোরুমের নাম"),
+              ),
+              TextField(
+                controller: addrCtrl,
+                decoration: const InputDecoration(labelText: "ঠিকানা (ঐচ্ছিক)"),
+              ),
+              TextField(
+                controller: phoneCtrl,
+                decoration: const InputDecoration(labelText: "ফোন (ঐচ্ছিক)"),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("বাতিল")),
+          ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text("সংরক্ষণ")),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    final name = nameCtrl.text.trim();
+    if (name.isEmpty) {
+      _msg("শোরুমের নাম লিখুন", bad: true);
+      return;
+    }
+    final addr = addrCtrl.text.trim().isEmpty ? null : addrCtrl.text.trim();
+    final phone = phoneCtrl.text.trim().isEmpty ? null : phoneCtrl.text.trim();
+
+    try {
+      http.Response r;
+      if (branch == null) {
+        final cr = await http.get(Uri.parse("$apiBaseUrl/companies"), headers: _headers);
+        final companies = cr.statusCode == 200 ? jsonDecode(utf8.decode(cr.bodyBytes)) : [];
+        if (companies is! List || companies.isEmpty) {
+          _msg("কোনো কোম্পানি নেই, আগে কোম্পানি তৈরি করুন", bad: true);
+          return;
+        }
+        r = await http.post(
+          Uri.parse("$apiBaseUrl/branches"),
+          headers: _headers,
+          body: jsonEncode({
+            "company_id": companies.first["id"],
+            "name": name,
+            "address": addr,
+            "phone": phone,
+          }),
+        );
+      } else {
+        r = await http.put(
+          Uri.parse("$apiBaseUrl/branches/${branch["id"]}"),
+          headers: _headers,
+          body: jsonEncode({"name": name, "address": addr, "phone": phone}),
+        );
+      }
+      if (r.statusCode == 200) {
+        _msg(branch == null ? "শোরুম যোগ হয়েছে" : "শোরুম আপডেট হয়েছে। উপরের তালিকায় দেখতে আবার লগইন করুন");
+        _load();
+      } else {
+        _msg(_detail(r), bad: true);
+      }
+    } catch (_) {
+      _msg("সার্ভারের সাথে সংযোগ করা যায়নি", bad: true);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text("শোরুম ব্যবস্থাপনা")),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => _openDialog(),
+        icon: const Icon(Icons.add),
+        label: const Text("শোরুম যোগ"),
+      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : _error != null
+              ? Center(child: Text(_error!))
+              : _list.isEmpty
+                  ? const Center(child: Text("কোনো শোরুম নেই"))
+                  : ListView.separated(
+                      padding: const EdgeInsets.fromLTRB(12, 12, 12, 90),
+                      itemCount: _list.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: 8),
+                      itemBuilder: (_, i) {
+                        final b = Map<String, dynamic>.from(_list[i]);
+                        final sub = [b["address"], b["phone"]]
+                            .where((x) => x != null && "$x".isNotEmpty)
+                            .join(" • ");
+                        return Card(
+                          child: ListTile(
+                            leading: const Icon(Icons.store),
+                            title: Text("${b["name"]}"),
+                            subtitle: sub.isEmpty ? null : Text(sub),
+                            trailing: IconButton(
+                              icon: const Icon(Icons.edit),
+                              tooltip: "সম্পাদনা",
+                              onPressed: () => _openDialog(branch: b),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+    );
+  }
+}

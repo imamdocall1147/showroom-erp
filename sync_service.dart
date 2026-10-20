@@ -1,0 +1,341 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'dart:convert';
+import 'dart:io';
+import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:http/http.dart' as http;
+import 'package:path/path.dart';
+import 'package:sqflite/sqflite.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'main.dart';
+
+/// অফলাইন-সিঙ্ক ব্যবস্থার কেন্দ্রীয় সার্ভিস।
+///
+/// শোরুম: টোকেনে থাকা শোরুমের id (0 = সব শোরুম) দিয়ে
+///  - তালিকার ক্যাশ শোরুম অনুযায়ী আলাদা রাখা হয়
+///  - প্রতিটি পেন্ডিং এন্ট্রির সাথে শোরুমের id জমা থাকে, সিঙ্কের সময়
+///    শুধু বর্তমান শোরুমের এন্ট্রি পাঠানো হয় (যাতে ভুল শোরুমের হিসাবে না ঢোকে)
+class SyncService {
+  static final SyncService _instance = SyncService._internal();
+  factory SyncService() => _instance;
+  SyncService._internal();
+
+  Future<Database>? _dbFuture;
+  bool _isSyncing = false;
+
+  // একাধিক জায়গা থেকে একসঙ্গে ডাকলেও ডেটাবেস একবারই খোলা হবে
+  Future<Database> get database => _dbFuture ??= _initDb();
+
+  Future<Database> _initDb() async {
+    // Windows/Linux-এ গ্লোবাল ফ্যাক্টরি না বদলে সরাসরি FFI ফ্যাক্টরি ব্যবহার
+    final DatabaseFactory factory;
+    if (!kIsWeb && (Platform.isWindows || Platform.isLinux)) {
+      sqfliteFfiInit();
+      factory = databaseFactoryFfi;
+    } else {
+      factory = databaseFactory;
+    }
+
+    final dbPath = await factory.getDatabasesPath();
+    final path = join(dbPath, "showroom_offline.db");
+
+    return factory.openDatabase(
+      path,
+      options: OpenDatabaseOptions(
+        version: 3,
+        onCreate: (db, version) async {
+          await db.execute('''
+            CREATE TABLE pending_actions (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              method TEXT NOT NULL,
+              endpoint TEXT NOT NULL,
+              body TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              description TEXT,
+              branch_id INTEGER
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE cached_lists (
+              key TEXT PRIMARY KEY,
+              data TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            )
+          ''');
+        },
+        onUpgrade: (db, oldVersion, newVersion) async {
+          // পুরনো ডেটাবেস থেকে আপগ্রেড: পেন্ডিং এন্ট্রি অক্ষত থাকবে
+          if (oldVersion < 2) {
+            await db.execute('''
+              CREATE TABLE IF NOT EXISTS cached_lists (
+                key TEXT PRIMARY KEY,
+                data TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+              )
+            ''');
+          }
+          if (oldVersion < 3) {
+            // পুরনো পেন্ডিং এন্ট্রির branch_id খালি (null) থাকবে, সেগুলো যেকোনো শোরুমে সিঙ্ক হবে
+            await db.execute(
+                "ALTER TABLE pending_actions ADD COLUMN branch_id INTEGER");
+          }
+        },
+      ),
+    );
+  }
+
+  // ---------- টোকেন থেকে শোরুমের id ----------
+
+  /// JWT টোকেনের ভেতর থেকে branch_id পড়ে (0 = সব শোরুম)
+  int _branchOf(String token) {
+    try {
+      final parts = token.split('.');
+      if (parts.length < 2) return 0;
+      final payload = utf8.decode(base64Url.decode(base64Url.normalize(parts[1])));
+      final data = jsonDecode(payload);
+      final b = data["branch_id"];
+      return b is int ? b : 0;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  String _cacheKey(String endpoint, String token) =>
+      "b${_branchOf(token)}:$endpoint";
+
+  // ---------- তালিকা ক্যাশ (ড্রপডাউনের জন্য) ----------
+
+  Future<void> _saveCache(String key, String jsonData) async {
+    final db = await database;
+    await db.insert(
+      "cached_lists",
+      {
+        "key": key,
+        "data": jsonData,
+        "updated_at": DateTime.now().toIso8601String(),
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<dynamic> _loadCache(String key) async {
+    final db = await database;
+    final rows = await db.query("cached_lists", where: "key = ?", whereArgs: [key]);
+    if (rows.isEmpty) return null;
+    return jsonDecode(rows.first["data"] as String);
+  }
+
+  /// সার্ভার থেকে তালিকা আনে এবং (শোরুম অনুযায়ী) ক্যাশ করে রাখে। সার্ভার না পেলে ক্যাশ থেকে দেয়।
+  /// রিটার্ন: {"data": List? (null = ক্যাশও নেই), "fromCache": bool}
+  Future<Map<String, dynamic>> getList(String endpoint, String token) async {
+    final key = _cacheKey(endpoint, token);
+    try {
+      final response = await http.get(
+        Uri.parse("$apiBaseUrl$endpoint"),
+        headers: {"Authorization": "Bearer $token"},
+      ).timeout(const Duration(seconds: 5));
+
+      if (response.statusCode == 200) {
+        final text = utf8.decode(response.bodyBytes);
+        await _saveCache(key, text);
+        return {"data": jsonDecode(text), "fromCache": false};
+      }
+    } catch (e) {
+      // নিচে ক্যাশ থেকে নেওয়া হবে
+    }
+    final cached = await _loadCache(key);
+    return {"data": cached, "fromCache": true};
+  }
+
+  /// অ্যাপ খোলার সময় নীরবে সব দরকারি তালিকা আপডেট করে রাখা
+  Future<void> refreshCaches(String token) async {
+    for (final endpoint in ["/products", "/warehouses", "/parties"]) {
+      await getList(endpoint, token);
+    }
+  }
+
+  /// ইন্টারনেট ও সার্ভার সত্যিই সাড়া দিচ্ছে কিনা
+  Future<bool> hasInternet() async {
+    try {
+      final connectivityResult = await Connectivity().checkConnectivity();
+      if (connectivityResult.contains(ConnectivityResult.none)) {
+        return false;
+      }
+      final response = await http
+          .get(Uri.parse("$apiBaseUrl/"))
+          .timeout(const Duration(seconds: 3));
+      return response.statusCode == 200;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// POST পাঠানোর চেষ্টা করে, ব্যর্থ হলে লোকালি জমা রাখে (বর্তমান শোরুমের নামে)।
+  Future<Map<String, dynamic>> apiCall({
+    required String method,
+    required String endpoint,
+    required Map<String, dynamic> body,
+    required String token,
+    String? description,
+  }) async {
+    final online = await hasInternet();
+
+    if (online) {
+      try {
+        final response = await http
+            .post(
+              Uri.parse("$apiBaseUrl$endpoint"),
+              headers: {
+                "Content-Type": "application/json",
+                "Authorization": "Bearer $token",
+              },
+              body: jsonEncode(body),
+            )
+            .timeout(const Duration(seconds: 8));
+
+        if (response.statusCode == 200) {
+          return {
+            "synced": true,
+            "data": jsonDecode(utf8.decode(response.bodyBytes)),
+          };
+        } else {
+          return {
+            "synced": true,
+            "error": true,
+            "message": _extractError(response),
+          };
+        }
+      } catch (e) {
+        return await _saveOffline(method, endpoint, body, description, _branchOf(token));
+      }
+    } else {
+      return await _saveOffline(method, endpoint, body, description, _branchOf(token));
+    }
+  }
+
+  String _extractError(http.Response response) {
+    try {
+      final data = jsonDecode(utf8.decode(response.bodyBytes));
+      final detail = data["detail"];
+      if (detail == null) return "সার্ভার থেকে এরর এসেছে";
+      return detail.toString();
+    } catch (e) {
+      return "সার্ভার থেকে এরর এসেছে (${response.statusCode})";
+    }
+  }
+
+  Future<Map<String, dynamic>> _saveOffline(
+    String method,
+    String endpoint,
+    Map<String, dynamic> body,
+    String? description,
+    int branchId,
+  ) async {
+    final db = await database;
+    await db.insert("pending_actions", {
+      "method": method,
+      "endpoint": endpoint,
+      "body": jsonEncode(body),
+      "created_at": DateTime.now().toIso8601String(),
+      "description": description ?? endpoint,
+      "branch_id": branchId,
+    });
+    return {"synced": false, "offline": true};
+  }
+
+  Future<int> pendingCount() async {
+    final db = await database;
+    final result =
+        await db.rawQuery("SELECT COUNT(*) as count FROM pending_actions");
+    return Sqflite.firstIntValue(result) ?? 0;
+  }
+
+  Future<List<Map<String, dynamic>>> getPendingActions() async {
+    final db = await database;
+    return db.query("pending_actions", orderBy: "created_at ASC");
+  }
+
+  /// জমে থাকা এন্ট্রি একে একে সার্ভারে পাঠানো।
+  /// শুধু বর্তমান টোকেনের শোরুমের এন্ট্রি পাঠানো হয়; অন্য শোরুমের এন্ট্রি
+  /// পেন্ডিংয়ে থেকে যায় এবং ওই শোরুমে ফিরলে যাবে। branch_id খালি (পুরনো) এন্ট্রি যেকোনো শোরুমে যায়।
+  /// রিটার্ন: {"success": int, "failed": int, "errors": List<String>, "stopped": bool}
+  /// - 200 → সফল, পেন্ডিং থেকে মুছে ফেলা হয়
+  /// - 401/403/5xx বা নেটওয়ার্ক সমস্যা → এন্ট্রি রেখে দেওয়া হয়, সিঙ্ক থামে (stopped = true)
+  /// - অন্য 4xx (যেমন ডুপ্লিকেট চেসিস) → ব্যর্থ গণ্য, মুছে ফেলা হয়, কারণ errors-এ থাকে
+  Future<Map<String, dynamic>> syncPendingActions(String token) async {
+    int success = 0;
+    int failed = 0;
+    final List<String> errors = [];
+    bool stopped = false;
+
+    if (_isSyncing) {
+      return {"success": 0, "failed": 0, "errors": errors, "stopped": true};
+    }
+    _isSyncing = true;
+
+    try {
+      final online = await hasInternet();
+      if (!online) {
+        return {"success": 0, "failed": 0, "errors": errors, "stopped": true};
+      }
+
+      final myBranch = _branchOf(token);
+      final db = await database;
+      final pending = await db.query(
+        "pending_actions",
+        where: "branch_id IS NULL OR branch_id = ?",
+        whereArgs: [myBranch],
+        orderBy: "created_at ASC",
+      );
+
+      for (final action in pending) {
+        try {
+          final endpoint = action["endpoint"] as String;
+          final body =
+              jsonDecode(action["body"] as String) as Map<String, dynamic>;
+
+          final response = await http
+              .post(
+                Uri.parse("$apiBaseUrl$endpoint"),
+                headers: {
+                  "Content-Type": "application/json",
+                  "Authorization": "Bearer $token",
+                },
+                body: jsonEncode(body),
+              )
+              .timeout(const Duration(seconds: 8));
+
+          final code = response.statusCode;
+          if (code == 200) {
+            await db.delete("pending_actions",
+                where: "id = ?", whereArgs: [action["id"]]);
+            success++;
+          } else if (code == 401 || code == 403 || code >= 500) {
+            // সেশন শেষ বা সার্ভারের সমস্যা: এন্ট্রি হারাতে দেওয়া যাবে না
+            stopped = true;
+            errors.add(
+                "${action['description']}: সার্ভার/অথেনটিকেশন সমস্যা ($code), পরে আবার চেষ্টা হবে");
+            break;
+          } else {
+            // ডেটা নিজেই গ্রহণযোগ্য নয় (যেমন ডুপ্লিকেট চেসিস)
+            await db.delete("pending_actions",
+                where: "id = ?", whereArgs: [action["id"]]);
+            failed++;
+            errors.add("${action['description']}: ${_extractError(response)}");
+          }
+        } catch (e) {
+          stopped = true;
+          break;
+        }
+      }
+    } finally {
+      _isSyncing = false;
+    }
+
+    return {
+      "success": success,
+      "failed": failed,
+      "errors": errors,
+      "stopped": stopped,
+    };
+  }
+}

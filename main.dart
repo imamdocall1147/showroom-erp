@@ -1,0 +1,1925 @@
+import 'branch_screen.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'dart:async';
+import 'dart:io' show Platform;
+import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+import 'party_screen.dart';
+import 'receivable_screen.dart';
+import 'expense_screen.dart';
+import 'accounts_screen.dart';
+import 'spare_parts_screen.dart';
+import 'payable_screen.dart';
+import 'invoice_screen.dart';
+import 'user_management_screen.dart';
+import 'brta_screen.dart';
+import 'dashboard_screen.dart';
+import 'reports_screen.dart';
+import 'app_theme.dart';
+import 'advance_order_screen.dart';
+import 'sync_service.dart';
+import 'product_screen.dart';
+import 'warehouse_screen.dart';
+import 'my_account_screen.dart';
+import 'approval_screen.dart';
+import 'unit_edit_screen.dart';
+import 'decoration_screen.dart';
+import 'trade_screens.dart';
+import 'supplier_advance_screen.dart';
+import 'supplier_order_screen.dart';
+import 'supplier_quick_add.dart';
+import 'welcome_screen.dart';
+import 'unit_search_screen.dart';
+import 'supplier_delivery_screen.dart';
+import 'auth_guard.dart';
+import 'report_pdf.dart';
+import 'app_update.dart';
+import 'scan_helper.dart';
+import 'investor_screen.dart';
+import 'package:qr_flutter/qr_flutter.dart';
+import 'stock_transfer_screen.dart';
+import 'partner_screen.dart';
+
+void main() {
+  // টোকেনের মেয়াদ শেষ হলে (৪০১) যেকোনো স্ক্রিন থেকে নিজে লগইন পাতায় ফেরা
+  AuthGuard.onExpired = () {
+    final nav = appNavigatorKey.currentState;
+    if (nav == null) return;
+    nav.pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const LoginScreen(expired: true)),
+      (route) => false,
+    );
+  };
+  // সব http.get/post কলে ৪০১ ধরার জন্য
+  http.runWithClient(
+    () {
+      WidgetsFlutterBinding.ensureInitialized();
+      runApp(const ShowroomApp());
+    },
+    () => AuthClient(http.Client()),
+  );
+}
+
+class ShowroomApp extends StatelessWidget {
+  const ShowroomApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      navigatorKey: appNavigatorKey,
+      title: kAppName,
+      debugShowCheckedModeBanner: false,
+      theme: buildAppTheme(),
+      home: const LoginScreen(),
+    );
+  }
+}
+
+// ব্যাকএন্ড যে পিসিতে চলে, শুধু সেই পিসির অ্যাপ সরাসরি লোকাল ঠিকানায় যায় (Tailscale লাগে না)।
+// ফোনে আর অন্য কম্পিউটারে Tailscale-এর ঠিকানা ব্যবহার হয়।
+// অন্য কম্পিউটারে Windows অ্যাপ চালাতে হলে নিচের true বদলে false করুন।
+const bool _isServerPc = true;
+const String _tailscaleUrl = "http://100.120.82.27:8000";
+final String apiBaseUrl = kIsWeb
+    ? "http://127.0.0.1:8000"
+    : ((!_isServerPc || Platform.isAndroid || Platform.isIOS)
+        ? _tailscaleUrl
+        : "http://127.0.0.1:8000");
+
+class LoginScreen extends StatefulWidget {
+  final bool expired;
+  const LoginScreen({super.key, this.expired = false});
+
+  @override
+  State<LoginScreen> createState() => _LoginScreenState();
+}
+
+class _LoginScreenState extends State<LoginScreen> {
+  final _usernameController = TextEditingController();
+  final _passwordController = TextEditingController();
+  bool _isLoading = false;
+  bool _obscure = true;
+  String? _errorMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.expired) {
+      _errorMessage = "লগইনের মেয়াদ শেষ হয়েছে। আবার লগইন করুন।";
+    }
+  }
+
+  @override
+  void dispose() {
+    _usernameController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _login() async {
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+
+    try {
+      final response = await http.post(
+        Uri.parse("$apiBaseUrl/login"),
+        headers: {"Content-Type": "application/json"},
+        body: jsonEncode({
+          "username": _usernameController.text.trim(),
+          "password": _passwordController.text,
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(utf8.decode(response.bodyBytes));
+        final token = data["access_token"];
+        final role = data["role"];
+        final branches = List<Map<String, dynamic>>.from(
+            (data["branches"] ?? []).map((b) => Map<String, dynamic>.from(b)));
+        final branchId = (data["branch_id"] ?? 0) as int;
+        final canViewAll = data["can_view_all"] == true;
+        AuthGuard.reset();
+
+        if (!mounted) return;
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (context) => WelcomeScreen(
+              token: token,
+              role: role,
+              branches: branches,
+              branchId: branchId,
+              canViewAll: canViewAll,
+            ),
+          ),
+        );
+      } else {
+        final data = jsonDecode(utf8.decode(response.bodyBytes));
+        if (!mounted) return;
+        setState(() {
+          _errorMessage = data["detail"] ?? "লগইন ব্যর্থ হয়েছে";
+        });
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _errorMessage = "সার্ভারের সাথে সংযোগ করা যায়নি। ব্যাকএন্ড চালু আছে কিনা দেখুন।";
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
+  Widget _buildLoginCard() {
+    return Container(
+      padding: const EdgeInsets.all(28),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: const [
+          BoxShadow(color: Color(0x33000000), blurRadius: 30, offset: Offset(0, 12)),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            "লগইন করুন",
+            style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800, color: kTextDark),
+          ),
+          const SizedBox(height: 4),
+          const Text("আপনার একাউন্টে প্রবেশ করুন", style: TextStyle(color: Colors.black54)),
+          const SizedBox(height: 24),
+          TextField(
+            controller: _usernameController,
+            textInputAction: TextInputAction.next,
+            decoration: const InputDecoration(
+              labelText: "ইউজারনেম",
+              prefixIcon: Icon(Icons.person_outline),
+            ),
+          ),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _passwordController,
+            obscureText: _obscure,
+            decoration: InputDecoration(
+              labelText: "পাসওয়ার্ড",
+              prefixIcon: const Icon(Icons.lock_outline),
+              suffixIcon: IconButton(
+                tooltip: _obscure ? "দেখান" : "লুকান",
+                icon: Icon(_obscure ? Icons.visibility_outlined : Icons.visibility_off_outlined),
+                onPressed: () {
+                  setState(() {
+                    _obscure = !_obscure;
+                  });
+                },
+              ),
+            ),
+            onSubmitted: (_) => _login(),
+          ),
+          if (_errorMessage != null) ...[
+            const SizedBox(height: 14),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFDECEC),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Icon(Icons.error_outline, color: Color(0xFFB42318), size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      _errorMessage!,
+                      style: const TextStyle(color: Color(0xFFB42318)),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+          const SizedBox(height: 24),
+          SizedBox(
+            height: 50,
+            child: ElevatedButton(
+              onPressed: _isLoading ? null : _login,
+              child: _isLoading
+                  ? const SizedBox(
+                      width: 22,
+                      height: 22,
+                      child: CircularProgressIndicator(strokeWidth: 2.4, color: Colors.white),
+                    )
+                  : const Text("লগইন", style: TextStyle(fontSize: 16)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [kSidebarColor, kBrandColor],
+          ),
+        ),
+        child: LayoutBuilder(
+          builder: (context, box) {
+            final wide = box.maxWidth >= 900;
+            if (!wide) {
+              return Center(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(20),
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 420),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const BrandMark(size: 64),
+                        const SizedBox(height: 14),
+                        const Text(
+                          kAppName,
+                          style: TextStyle(
+                              color: Colors.white, fontSize: 28, fontWeight: FontWeight.w800),
+                        ),
+                        const SizedBox(height: 4),
+                        const Text(
+                          "শোরুম ম্যানেজমেন্ট সিস্টেম",
+                          style: TextStyle(color: Colors.white70),
+                        ),
+                        const SizedBox(height: 24),
+                        _buildLoginCard(),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            }
+            return Row(
+              children: [
+                Expanded(
+                  flex: 5,
+                  child: Padding(
+                    padding: const EdgeInsets.all(56),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const BrandMark(size: 76),
+                        const SizedBox(height: 24),
+                        const Text(
+                          kAppName,
+                          style: TextStyle(
+                              color: Colors.white, fontSize: 42, fontWeight: FontWeight.w800),
+                        ),
+                        const SizedBox(height: 8),
+                        const Text(
+                          "শোরুম ম্যানেজমেন্ট সিস্টেম",
+                          style: TextStyle(color: Colors.white70, fontSize: 18),
+                        ),
+                        const SizedBox(height: 36),
+                        _loginFeature("স্টক, ক্রয় ও বিক্রয় এক জায়গায়"),
+                        _loginFeature("কাস্টমারের বাকি, জমা ও অগ্রিম অর্ডার"),
+                        _loginFeature("৫০টির বেশি রিপোর্ট"),
+                      ],
+                    ),
+                  ),
+                ),
+                Expanded(
+                  flex: 4,
+                  child: Center(
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.all(32),
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 420),
+                        child: _buildLoginCard(),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+Widget _loginFeature(String text) {
+  return Padding(
+    padding: const EdgeInsets.only(bottom: 12),
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Icon(Icons.check_circle, size: 20, color: Color(0xFF7FD1AE)),
+        const SizedBox(width: 10),
+        Text(text, style: const TextStyle(color: Colors.white, fontSize: 15)),
+      ],
+    ),
+  );
+}
+
+class HomeScreen extends StatefulWidget {
+  final String token;
+  final String role;
+
+  const HomeScreen({super.key, required this.token, required this.role});
+
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  bool _isLoading = true;
+  String? _errorMessage;
+  List<dynamic> _units = [];
+  int _totalInStock = 0;
+  bool _stockFromCache = false;
+  final TextEditingController _searchC = TextEditingController();
+  String _search = '';
+
+  // অফলাইন সিঙ্কের জন্য
+  int _pendingCount = 0;
+  bool _isSyncingNow = false;
+  Timer? _syncTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadStock();
+    _refreshPendingCount();
+    // অফলাইনে ফর্ম চালানোর জন্য ড্রপডাউনের তালিকা ক্যাশ করে রাখা
+    SyncService().refreshCaches(widget.token);
+    // অ্যাপ খোলার পরপরই একবার সিঙ্কের চেষ্টা
+    _trySync(silent: true);
+    // প্রতি ১০ সেকেন্ডে পেন্ডিং সংখ্যা আপডেট, প্রতি ৩০ সেকেন্ডে সিঙ্কের চেষ্টা
+    int tick = 0;
+    _syncTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+      tick++;
+      if (tick % 3 == 0) {
+        _trySync(silent: true);
+      } else {
+        _refreshPendingCount();
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _syncTimer?.cancel();
+    _searchC.dispose();
+    super.dispose();
+  }
+
+  void _showSnack(String message, {Color? color}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), backgroundColor: color),
+    );
+  }
+
+  Future<void> _refreshPendingCount() async {
+    final count = await SyncService().pendingCount();
+    if (mounted) {
+      setState(() {
+        _pendingCount = count;
+      });
+    }
+  }
+
+  /// পেন্ডিং এন্ট্রি সার্ভারে পাঠানোর চেষ্টা।
+  /// silent = true হলে (টাইমারে) কিছু না হলে কোনো মেসেজ দেখায় না।
+  Future<void> _trySync({bool silent = true}) async {
+    if (_isSyncingNow) return;
+
+    final sync = SyncService();
+    final before = await sync.pendingCount();
+    if (!mounted) return;
+
+    if (before == 0) {
+      setState(() {
+        _pendingCount = 0;
+      });
+      if (!silent) _showSnack("কোনো পেন্ডিং এন্ট্রি নেই");
+      return;
+    }
+
+    setState(() {
+      _isSyncingNow = true;
+    });
+
+    Map<String, dynamic> result;
+    try {
+      result = await sync.syncPendingActions(widget.token);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSyncingNow = false;
+        });
+      }
+    }
+
+    final left = await sync.pendingCount();
+    if (!mounted) return;
+    setState(() {
+      _pendingCount = left;
+    });
+
+    final int success = result["success"] as int;
+    final int failed = result["failed"] as int;
+    final List<String> errors = List<String>.from(result["errors"] as List);
+
+    if (success > 0) {
+      _loadStock();
+      _showSnack("$success টি এন্ট্রি সার্ভারে সিঙ্ক হয়েছে", color: Colors.green);
+    }
+
+    if (failed > 0 || (errors.isNotEmpty && !silent)) {
+      await showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text("সিঙ্কে সমস্যা"),
+          content: SizedBox(
+            width: 450,
+            child: ListView(
+              shrinkWrap: true,
+              children: errors.map((e) => ListTile(
+                    dense: true,
+                    leading: const Icon(Icons.error_outline, color: Colors.red, size: 18),
+                    title: Text(e),
+                  )).toList(),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text("ঠিক আছে"),
+            ),
+          ],
+        ),
+      );
+    } else if (success == 0 && !silent) {
+      _showSnack("সার্ভারে সংযোগ পাওয়া যায়নি — পরে আবার চেষ্টা করুন",
+          color: Colors.orange);
+    }
+  }
+
+  Future<void> _showPendingDialog() async {
+    final pending = await SyncService().getPendingActions();
+    if (!mounted) return;
+    await showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text("পেন্ডিং এন্ট্রি (${pending.length})"),
+        content: SizedBox(
+          width: 400,
+          child: pending.isEmpty
+              ? const Text("কোনো পেন্ডিং এন্ট্রি নেই")
+              : ListView(
+                  shrinkWrap: true,
+                  children: pending.map((p) => ListTile(
+                        dense: true,
+                        leading: const Icon(Icons.schedule, size: 18),
+                        title: Text("${p['description']}"),
+                      )).toList(),
+                ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text("বন্ধ করুন"),
+          ),
+          if (pending.isNotEmpty)
+            ElevatedButton(
+              onPressed: () {
+                Navigator.of(ctx).pop();
+                _trySync(silent: false);
+              },
+              child: const Text("এখনই সিঙ্ক করুন"),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _loadStock() async {
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+
+    try {
+      final res = await SyncService().getList("/reports/stock", widget.token);
+      if (!mounted) return;
+
+      if (res["data"] != null) {
+        final data = res["data"];
+        setState(() {
+          _units = data["units"];
+          _totalInStock = data["total_units_in_stock"];
+          _stockFromCache = res["fromCache"] == true;
+        });
+      } else {
+        setState(() {
+          _errorMessage = "স্টক তালিকা আনতে সমস্যা হয়েছে";
+        });
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _errorMessage = "সার্ভারের সাথে সংযোগ করা যায়নি";
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _openPurchaseScreen() async {
+    final result = await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => PurchaseScreen(token: widget.token),
+      ),
+    );
+    if (!mounted) return;
+    if (result == true) {
+      _loadStock();
+      _showSnack("বাইক সফলভাবে স্টকে যোগ হয়েছে");
+    } else if (result == "offline") {
+      await _refreshPendingCount();
+      _showSnack("ইন্টারনেট নেই — এন্ট্রিটা পরে সিঙ্ক হবে", color: Colors.orange);
+    }
+  }
+
+  /// ভুল এন্ট্রি মুছে ফেলা (অ্যাডমিন সরাসরি, অন্য রোল অনুমোদনের অনুরোধ পাঠায়)
+  Future<void> _deleteUnit(Map<String, dynamic> unit) async {
+    final isAdmin = widget.role.trim().toLowerCase() == 'admin';
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text("ভুল এন্ট্রি মুছবেন?"),
+        content: Text(
+          "${unit['brand'] ?? ''} ${unit['model'] ?? ''}\n"
+          "চেসিস: ${unit['chassis_no']}\n\n"
+          "${isAdmin ? 'বাইকটি স্টক থেকে মুছে যাবে এবং এর ক্রয়ের হিসাবও বাতিল হবে।' : 'অ্যাডমিনের অনুমোদনের জন্য অনুরোধ যাবে।'}",
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text("বাতিল"),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text("মুছুন", style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+
+    try {
+      final res = await http.delete(
+        Uri.parse("$apiBaseUrl/units/${unit['unit_id']}"),
+        headers: {"Authorization": "Bearer ${widget.token}"},
+      );
+      if (!mounted) return;
+      if (res.statusCode == 200) {
+        _loadStock();
+        _showSnack("বাইকটি স্টক থেকে মুছে ফেলা হয়েছে", color: Colors.green);
+      } else if (res.statusCode == 202) {
+        _showSnack("অ্যাডমিনের অনুমোদনের জন্য অনুরোধ পাঠানো হয়েছে", color: Colors.orange);
+      } else {
+        String msg = "মুছা যায়নি";
+        try {
+          msg = jsonDecode(utf8.decode(res.bodyBytes))["detail"] ?? msg;
+        } catch (_) {}
+        _showSnack(msg, color: Colors.red);
+      }
+    } catch (e) {
+      _showSnack("সার্ভারের সাথে সংযোগ করা যায়নি", color: Colors.red);
+    }
+  }
+
+  Future<void> _openEditUnit(Map<String, dynamic> unit) async {
+    final result = await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) =>
+            EditUnitScreen(token: widget.token, unitId: unit['unit_id'] as int),
+      ),
+    );
+    if (!mounted) return;
+    if (result == true) {
+      _loadStock();
+      _showSnack("স্টকের তথ্য আপডেট হয়েছে");
+    } else if (result == "pending") {
+      _showSnack("অ্যাডমিনের অনুমোদনের জন্য অনুরোধ পাঠানো হয়েছে", color: Colors.orange);
+    }
+  }
+
+  Future<void> _openSellScreen(Map<String, dynamic> unit) async {
+    final result = await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => SellScreen(token: widget.token, unit: unit),
+      ),
+    );
+    if (!mounted) return;
+    if (result == true) {
+      _loadStock();
+      _showSnack("বিক্রয় সফল হয়েছে");
+    } else if (result == "offline") {
+      await _refreshPendingCount();
+      _showSnack(
+        "ইন্টারনেট নেই — বিক্রয়ের এন্ট্রি পরে সিঙ্ক হবে (ইনভয়েস সিঙ্কের পর পাওয়া যাবে)",
+        color: Colors.orange,
+      );
+    }
+  }
+
+  /// স্টক তালিকা PDF (সার্চ দিয়ে ছাঁটা থাকলে শুধু সেটুকুই যাবে)
+  void _openStockPdf(List<dynamic> list) {
+    num total = 0;
+    final rows = <List<String>>[];
+    for (var i = 0; i < list.length; i++) {
+      final u = Map<String, dynamic>.from(list[i] as Map);
+      final price = (u['purchase_price'] ?? 0) as num;
+      total += price;
+      rows.add([
+        "${i + 1}",
+        "${u['brand'] ?? ''} ${u['model'] ?? ''}".trim(),
+        "${u['chassis_no'] ?? '-'}",
+        "${u['engine_no'] ?? '-'}",
+        "${u['color'] ?? '-'}",
+        "${u['warehouse'] ?? '-'}",
+        formatTaka(price),
+      ]);
+    }
+    final q = _search.trim();
+    openReportPdf(
+      context,
+      title: "স্টক তালিকা",
+      subtitle: q.isEmpty ? "মোট ${list.length} টি বাইক" : "খোঁজা: $q   |   ${list.length} টি বাইক",
+      headers: const ["ক্রমিক", "ব্র্যান্ড / মডেল", "চেসিস নং", "ইঞ্জিন নং", "রঙ", "গোডাউন", "ক্রয় মূল্য"],
+      rightAlign: const [false, false, false, false, false, false, true],
+      rows: rows,
+      totals: ["", "মোট ${list.length} টি", "", "", "", "", formatTaka(total)],
+    );
+  }
+
+  /// ক্যামেরায় চেসিসের QR স্ক্যান করে সরাসরি ওই বাইকের বিক্রয়ের পাতা খোলা (ফোনে)
+  Future<void> _scanToSell() async {
+    final code = await scanCodeOnce(context);
+    if (code == null || !mounted) return;
+    final key = code.trim().toLowerCase();
+    final found = _units
+        .where((u) => "${u['chassis_no'] ?? ''}".trim().toLowerCase() == key)
+        .toList();
+    if (found.isEmpty) {
+      _searchC.text = code;
+      setState(() {
+        _search = code;
+      });
+      _showSnack("এই চেসিস নম্বরের বাইক স্টকে পাওয়া যায়নি: $code", color: Colors.orange);
+      return;
+    }
+    await _openSellScreen(Map<String, dynamic>.from(found.first));
+  }
+
+  /// চেসিস নম্বরের QR বড় করে দেখানো (স্ক্যান বা স্ক্রিনশটের জন্য)
+  void _showChassisQr(Map<String, dynamic> unit) {
+    final ch = "${unit['chassis_no'] ?? ''}".trim();
+    if (ch.isEmpty) return;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text("${unit['brand'] ?? ''} ${unit['model'] ?? ''}".trim()),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              color: Colors.white,
+              child: QrImageView(
+                data: ch,
+                version: QrVersions.auto,
+                size: 240,
+                padding: EdgeInsets.zero,
+                backgroundColor: Colors.white,
+              ),
+            ),
+            const SizedBox(height: 12),
+            SelectableText(
+              "চেসিস: $ch",
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text("বন্ধ করুন"),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// স্টক কার্ডের বাঁ পাশের ছোট QR (চেসিস না থাকলে বাইকের আইকন)
+  Widget _chassisQrBox(Map<String, dynamic> unit) {
+    final ch = "${unit['chassis_no'] ?? ''}".trim();
+    if (ch.isEmpty) {
+      return Container(
+        width: 58,
+        height: 58,
+        decoration: BoxDecoration(
+          color: const Color(0xFFE8F0FB),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: const Icon(Icons.two_wheeler, color: kBrandColor),
+      );
+    }
+    return Tooltip(
+      message: "চেসিসের QR বড় করে দেখুন",
+      child: InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onTap: () => _showChassisQr(unit),
+        child: Container(
+          width: 58,
+          height: 58,
+          padding: const EdgeInsets.all(3),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: const Color(0xFFD9E3F3)),
+          ),
+          child: QrImageView(
+            data: ch,
+            version: QrVersions.auto,
+            padding: EdgeInsets.zero,
+            backgroundColor: Colors.white,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _tag(IconData icon, String text) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF1F4F9),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 13, color: Colors.black54),
+          const SizedBox(width: 4),
+          Text(text, style: const TextStyle(fontSize: 12, color: Colors.black87)),
+        ],
+      ),
+    );
+  }
+
+  Widget _banner(IconData icon, String text, Color bg, Color fg) {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(10)),
+      child: Row(
+        children: [
+          Icon(icon, size: 18, color: fg),
+          const SizedBox(width: 8),
+          Expanded(child: Text(text, style: TextStyle(fontSize: 13, color: fg))),
+        ],
+      ),
+    );
+  }
+
+  Widget _stockTile(Map<String, dynamic> unit) {
+    return LayoutBuilder(
+      builder: (context, box) {
+        final compact = box.maxWidth < 520;
+        return Card(
+          margin: const EdgeInsets.only(bottom: 10),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(14),
+            onTap: () => _openSellScreen(unit),
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Row(
+                children: [
+                  _chassisQrBox(unit),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          "${unit['brand'] ?? ''} ${unit['model'] ?? ''}",
+                          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          "চেসিস: ${unit['chassis_no']}",
+                          style: const TextStyle(fontSize: 12.5, color: Colors.black54),
+                        ),
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 6,
+                          runSpacing: 6,
+                          children: [
+                            _tag(Icons.palette_outlined, "${unit['color'] ?? '-'}"),
+                            _tag(Icons.store_outlined, "${unit['warehouse'] ?? '-'}"),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Text(
+                        formatTaka((unit['purchase_price'] ?? 0) as num),
+                        style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
+                      ),
+                      const SizedBox(height: 4),
+                      const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text("বিক্রি করুন",
+                              style: TextStyle(
+                                  fontSize: 12,
+                                  color: kBrandColor,
+                                  fontWeight: FontWeight.w600)),
+                          Icon(Icons.chevron_right, size: 16, color: kBrandColor),
+                        ],
+                      ),
+                    ],
+                  ),
+                  if (compact)
+                    PopupMenuButton<String>(
+                      tooltip: "আরও",
+                      onSelected: (v) {
+                        if (v == 'edit') {
+                          _openEditUnit(unit);
+                        } else {
+                          _deleteUnit(unit);
+                        }
+                      },
+                      itemBuilder: (ctx) => const [
+                        PopupMenuItem(value: 'edit', child: Text("স্টক এডিট")),
+                        PopupMenuItem(value: 'delete', child: Text("ভুল এন্ট্রি মুছুন")),
+                      ],
+                    )
+                  else ...[
+                    const SizedBox(width: 4),
+                    IconButton(
+                      tooltip: "স্টক এডিট",
+                      icon: const Icon(Icons.edit, size: 20, color: Colors.black54),
+                      onPressed: () => _openEditUnit(unit),
+                    ),
+                    IconButton(
+                      tooltip: "ভুল এন্ট্রি মুছুন",
+                      icon: const Icon(Icons.delete_outline, size: 20, color: Colors.red),
+                      onPressed: () => _deleteUnit(unit),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final q = _search.trim().toLowerCase();
+    final shown = q.isEmpty
+        ? _units
+        : _units.where((u) {
+            final text =
+                "${u['brand'] ?? ''} ${u['model'] ?? ''} ${u['chassis_no'] ?? ''} ${u['engine_no'] ?? ''} ${u['color'] ?? ''} ${u['warehouse'] ?? ''}"
+                    .toLowerCase();
+            return text.contains(q);
+          }).toList();
+
+    num totalValue = 0;
+    for (final u in _units) {
+      totalValue += (u['purchase_price'] ?? 0) as num;
+    }
+
+    Widget content;
+    if (_isLoading) {
+      content = const Center(child: CircularProgressIndicator());
+    } else if (_errorMessage != null) {
+      content = Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(_errorMessage!, style: const TextStyle(color: Colors.red)),
+            const SizedBox(height: 12),
+            ElevatedButton(
+              onPressed: _loadStock,
+              child: const Text("আবার চেষ্টা করুন"),
+            ),
+          ],
+        ),
+      );
+    } else {
+      content = ListView.builder(
+        padding: const EdgeInsets.all(16),
+        itemCount: shown.length + 1,
+        itemBuilder: (context, index) {
+          if (index == 0) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                StatGrid(cards: [
+                  StatCard(
+                    icon: Icons.two_wheeler,
+                    label: "স্টকে মোট বাইক",
+                    value: "$_totalInStock টি",
+                  ),
+                  StatCard(
+                    icon: Icons.account_balance_wallet_outlined,
+                    label: "স্টকের মোট ক্রয় মূল্য",
+                    value: formatTaka(totalValue),
+                    color: const Color(0xFF2E9E6B),
+                  ),
+                  StatCard(
+                    icon: Icons.sync,
+                    label: "সিঙ্কের অপেক্ষায়",
+                    value: "$_pendingCount টি",
+                    color: _pendingCount > 0 ? Colors.orange : Colors.blueGrey,
+                  ),
+                ]),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: _searchC,
+                  decoration: InputDecoration(
+                    hintText: "মডেল, চেসিস, ইঞ্জিন, রঙ বা গোডাউন দিয়ে খুঁজুন",
+                    prefixIcon: const Icon(Icons.search),
+                    suffixIcon: _search.isEmpty
+                        ? null
+                        : IconButton(
+                            tooltip: "মুছুন",
+                            icon: const Icon(Icons.clear),
+                            onPressed: () {
+                              _searchC.clear();
+                              setState(() {
+                                _search = '';
+                              });
+                            },
+                          ),
+                  ),
+                  onChanged: (v) {
+                    setState(() {
+                      _search = v;
+                    });
+                  },
+                ),
+                const SizedBox(height: 14),
+                if (shown.isEmpty)
+                  Center(
+                    child: EmptyState(
+                      icon: Icons.two_wheeler,
+                      message: _units.isEmpty ? "স্টকে কোনো বাইক নেই" : "কিছু পাওয়া যায়নি",
+                    ),
+                  ),
+              ],
+            );
+          }
+          return _stockTile(Map<String, dynamic>.from(shown[index - 1]));
+        },
+      );
+    }
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text("স্টক তালিকা"),
+        actions: [
+          ReportsIconButton(
+            token: widget.token,
+            title: "স্টক রিপোর্ট",
+            groups: const ['Stock'],
+          ),
+          ReportsIconButton(
+            token: widget.token,
+            title: "বিক্রয় রিপোর্ট",
+            groups: const ['Sales'],
+            icon: Icons.point_of_sale,
+          ),
+          if (canScanWithCamera)
+            IconButton(
+              tooltip: "QR স্ক্যান করে বিক্রি",
+              icon: const Icon(Icons.qr_code_scanner),
+              onPressed: _scanToSell,
+            ),
+          IconButton(
+            tooltip: "স্টক তালিকা PDF",
+            icon: const Icon(Icons.picture_as_pdf),
+            onPressed: shown.isEmpty ? null : () => _openStockPdf(shown),
+          ),
+          IconButton(
+            tooltip: "স্টক রিফ্রেশ",
+            icon: const Icon(Icons.refresh),
+            onPressed: _loadStock,
+          ),
+          IconButton(
+            tooltip: "সিঙ্ক / পেন্ডিং এন্ট্রি",
+            onPressed: _isSyncingNow ? null : _showPendingDialog,
+            icon: _isSyncingNow
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : Badge(
+                    isLabelVisible: _pendingCount > 0,
+                    label: Text("$_pendingCount"),
+                    child: const Icon(Icons.sync),
+                  ),
+          ),
+          Padding(
+            padding: const EdgeInsets.only(right: 16),
+            child: Center(
+              child: Chip(
+                label: Text(widget.role),
+                avatar: const Icon(Icons.person, size: 16),
+              ),
+            ),
+          ),
+        ],
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _openPurchaseScreen,
+        icon: const Icon(Icons.add),
+        label: const Text("নতুন বাইক"),
+      ),
+      body: Column(
+        children: [
+          if (_stockFromCache)
+            _banner(Icons.cloud_off, "অফলাইন — সর্বশেষ সংরক্ষিত স্টক তালিকা দেখানো হচ্ছে",
+                Colors.amber.shade100, Colors.brown.shade800),
+          if (_pendingCount > 0)
+            _banner(
+                Icons.schedule,
+                "$_pendingCount টি এন্ট্রি সিঙ্কের অপেক্ষায় আছে (ইন্টারনেট ফিরলে নিজে থেকে যাবে)",
+                Colors.orange.shade100,
+                Colors.brown.shade800),
+          Expanded(
+            child: RefreshIndicator(
+              onRefresh: _loadStock,
+              child: content,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------
+// মূল কাঠামো।
+// • বড় স্ক্রিনে বাঁ পাশে স্থায়ী মেনু, যেটা ভাঁজ করে শুধু আইকন-রেলে আনা যায়।
+// • ছোট স্ক্রিনে (৮০০ পিক্সেলের কম) মেনু লুকিয়ে যায়, উপরের হ্যামবার্গার চাপলে ড্রয়ার খোলে।
+// • ইউজারের রোল অনুযায়ী মেনুর আইটেম দেখানো/লুকানো হয়।
+// • শোরুম বাছাইয়ের ড্রপডাউন ও "গাড়ী খুঁজুন" বাটন টপবারে (ছোট স্ক্রিনে অ্যাপবারে) থাকে।
+// ডান পাশের অংশে আলাদা Navigator চলে, তাই যেকোনো পেজ খুললেও মেনু থেকে যায়।
+// ---------------------------------------------------------------
+class _MenuItem {
+  final IconData icon;
+  final String title;
+  final Widget Function(String token) builder;
+
+  /// কোন কোন রোল এই আইটেম দেখবে (ছোট হাতের অক্ষরে লিখুন)।
+  /// null মানে সব রোল দেখবে।
+  final Set<String>? roles;
+
+  _MenuItem(this.icon, this.title, this.builder, {this.roles});
+}
+
+class AppShell extends StatefulWidget {
+  final String token;
+  final String role;
+  final List<Map<String, dynamic>> branches;
+  final int branchId; // 0 = সব শোরুম
+  final bool canViewAll;
+
+  const AppShell({
+    super.key,
+    required this.token,
+    required this.role,
+    this.branches = const [],
+    this.branchId = 0,
+    this.canViewAll = false,
+  });
+
+  @override
+  State<AppShell> createState() => _AppShellState();
+}
+
+class _AppShellState extends State<AppShell> {
+  static const int _expenseIndex = 4;
+  static const int _dashboardIndex = 1; // লগইনের পর প্রথমে এই পেজ খোলে
+  static const double _breakpoint = 800;
+  static const double _expandedWidth = 250;
+  static const double _collapsedWidth = 64;
+
+  final GlobalKey<NavigatorState> _navKey = GlobalKey<NavigatorState>();
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+  final ScrollController _menuScroll = ScrollController();
+
+  int _selected = _dashboardIndex;
+  bool _collapsed = false;
+
+  // প্রতিবার মেনুতে ট্যাপ করলে বাড়ে। পুরনো _go() কল শেষ হলে বুঝতে পারে
+  // যে এর মধ্যে নতুন ট্যাপ হয়ে গেছে, তখন সে আর হাইলাইট বদলায় না।
+  int _navToken = 0;
+
+  // রোল নিয়ন্ত্রণ করতে আইটেমের শেষে roles: {'admin', 'manager'} ধরনের লাইন দিন।
+  // roles না দিলে সবাই আইটেমটা দেখবে।
+  // নতুন আইটেম সবসময় তালিকার একদম শেষে যোগ করুন (উপরের index গুলো যেন না সরে)।
+  // সতর্কতা: "গাড়ী খুঁজুন" সবসময় তালিকার শেষ আইটেম থাকতে হবে (টপবারের সার্চ বাটন এটাই খোলে)।
+  late final List<_MenuItem> _items = [
+    _MenuItem(Icons.two_wheeler, "স্টক তালিকা",
+        (t) => HomeScreen(token: t, role: widget.role)),
+    _MenuItem(Icons.dashboard, "ড্যাশবোর্ড", (t) => DashboardScreen(token: t)),
+    _MenuItem(Icons.people, "কাস্টমার/সাপ্লায়ার", (t) => PartyListScreen(token: t)),
+    _MenuItem(Icons.receipt_long, "বাকি আদায়", (t) => ReceivablesScreen(token: t)),
+    _MenuItem(Icons.money_off, "দোকান খরচ", (t) => ExpenseScreen(token: t)),
+    _MenuItem(Icons.account_balance_wallet, "একাউন্ট ব্যালান্স",
+        (t) => AccountsScreen(token: t)),
+    _MenuItem(Icons.settings, "স্পেয়ার পার্টস", (t) => SparePartsScreen(token: t)),
+    _MenuItem(Icons.local_shipping, "সরবরাহকারীর পাওনা",
+        (t) => PayablesScreen(token: t)),
+    _MenuItem(Icons.admin_panel_settings, "ইউজার ম্যানেজমেন্ট",
+        (t) => UserManagementScreen(token: t),
+        roles: {'admin'}),
+    _MenuItem(Icons.assignment, "BRTA রেজিস্ট্রেশন", (t) => BrtaScreen(token: t)),
+    _MenuItem(Icons.bar_chart, "রিপোর্ট", (t) => ReportsHomeScreen(token: t)),
+    _MenuItem(Icons.event_available, "অগ্রিম অর্ডার",
+        (t) => AdvanceOrderListScreen(token: t)),
+    _MenuItem(Icons.two_wheeler, "প্রোডাক্ট মডেল",
+        (t) => ProductListScreen(token: t)),
+    _MenuItem(Icons.warehouse, "গোডাউন",
+        (t) => WarehouseListScreen(token: t)),
+    _MenuItem(Icons.lock_reset, "আমার একাউন্ট",
+        (t) => MyAccountScreen(token: t, role: widget.role)),
+    _MenuItem(Icons.fact_check, "অনুমোদন",
+        (t) => ApprovalScreen(token: t),
+        roles: {'admin'}),
+    _MenuItem(Icons.brush, "ডেকোরেশন আয়",
+        (t) => DecorationIncomeScreen(token: t)),
+    _MenuItem(Icons.payments_outlined, "সাপ্লায়ার অগ্রিম",
+        (t) => SupplierAdvanceScreen(token: t)),
+    _MenuItem(Icons.local_shipping_outlined, "সাপ্লায়ার অর্ডার",
+        (t) => SupplierOrderScreen(token: t)),
+    _MenuItem(Icons.groups, "ইনভেস্টর",
+        (t) => InvestorListScreen(token: t),
+        roles: {'admin'}),
+    _MenuItem(Icons.swap_horiz, "স্টক ট্রান্সফার",
+        (t) => StockTransferScreen(token: t)),
+    _MenuItem(Icons.local_shipping, "রানার ডেলিভারি",
+        (t) => SupplierDeliveryScreen(token: t)),
+    _MenuItem(Icons.search, "গাড়ী খুঁজুন",
+        (t) => UnitSearchScreen(token: t)),
+    _MenuItem(Icons.groups, "পার্টনার হিসাব",
+        (t) => PartnerScreen(token: t),
+        roles: {'admin'}),
+    
+    
+    _MenuItem(Icons.store, "শোরুম ব্যবস্থাপনা",
+        (t) => BranchScreen(token: t),
+        roles: {'admin'}),
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    // ফোনে অ্যাপ খুললে নতুন ভার্সন আছে কিনা দেখা
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) checkForAppUpdate(context);
+    });
+  }
+
+  @override
+  void dispose() {
+    _menuScroll.dispose();
+    super.dispose();
+  }
+
+  bool _canSee(_MenuItem item) {
+    final allowed = item.roles;
+    if (allowed == null) return true;
+    return allowed.contains(widget.role.trim().toLowerCase());
+  }
+
+  List<int> get _visibleIndexes => [
+        for (int i = 0; i < _items.length; i++)
+          if (_canSee(_items[i])) i
+      ];
+
+  /// "গাড়ী খুঁজুন" পেজ খোলে (মেনুর শেষ আইটেম)
+  void _openSearch() => _go(_items.length - 1);
+
+  Future<void> _go(int index) async {
+    if (!_canSee(_items[index])) return;
+
+    final myToken = ++_navToken;
+    setState(() {
+      _selected = index;
+    });
+    final nav = _navKey.currentState;
+    if (nav == null) return;
+
+    if (index == 0) {
+      nav.popUntil((route) => route.isFirst);
+      return;
+    }
+
+    // আগের খোলা পেজ সরিয়ে নতুনটা স্টক পেজের উপরে বসে
+    final dynamic result = await nav.pushAndRemoveUntil<dynamic>(
+      MaterialPageRoute<dynamic>(builder: (_) => _items[index].builder(widget.token)),
+      (route) => route.isFirst,
+    );
+    if (!mounted) return;
+
+    // এর মধ্যে অন্য মেনুতে (বা একই মেনুতে আবার) ট্যাপ হয়ে থাকলে
+    // এই পুরনো কলের আর কিছু করার নেই
+    if (myToken != _navToken) return;
+
+    if (index == _expenseIndex) {
+      if (result == true) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("খরচ সফলভাবে যোগ হয়েছে")),
+        );
+      } else if (result == "offline") {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("ইন্টারনেট নেই — খরচের এন্ট্রি পরে সিঙ্ক হবে"),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+    }
+
+    // পেজ বন্ধ হয়ে স্টক পেজে ফিরলে মেনুর চিহ্নও স্টকে ফিরবে
+    setState(() {
+      _selected = 0;
+    });
+  }
+
+  // নিচে স্টক পেজ (এটা সবসময় চালু থাকে, কারণ অফলাইন সিঙ্ক এখান থেকেই চলে),
+  // তার উপরে ড্যাশবোর্ড। তাই লগইনের পর প্রথমে ড্যাশবোর্ড দেখা যায়।
+  List<Route<dynamic>> _initialRoutes(NavigatorState navigator, String initialRoute) {
+    final home = MaterialPageRoute<dynamic>(
+      builder: (_) => HomeScreen(token: widget.token, role: widget.role),
+    );
+    final dashboard = MaterialPageRoute<dynamic>(
+      builder: (_) => _items[_dashboardIndex].builder(widget.token),
+    );
+    // ড্যাশবোর্ড নিজে বন্ধ হলে (মেনুতে নতুন ট্যাপ ছাড়া) মেনুর চিহ্ন স্টকে ফিরবে
+    dashboard.popped.then((_) {
+      if (mounted && _navToken == 0) {
+        setState(() {
+          _selected = 0;
+        });
+      }
+    });
+    return [home, dashboard];
+  }
+
+  // ---------------------------------------------------------------
+  // শোরুম বদল: /auth/switch-branch ডেকে নতুন টোকেন নিয়ে AppShell নতুন করে খোলে
+  // ---------------------------------------------------------------
+  Future<void> _switchBranch(int newId) async {
+    if (newId == widget.branchId) return;
+    try {
+      final res = await http.post(
+        Uri.parse("$apiBaseUrl/auth/switch-branch"),
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer ${widget.token}",
+        },
+        body: jsonEncode({"branch_id": newId}),
+      );
+      if (!mounted) return;
+      if (res.statusCode == 200) {
+        final data = jsonDecode(utf8.decode(res.bodyBytes));
+        final branches = List<Map<String, dynamic>>.from(
+            (data["branches"] ?? []).map((b) => Map<String, dynamic>.from(b)));
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (_) => AppShell(
+              token: data["access_token"],
+              role: data["role"] ?? widget.role,
+              branches: branches,
+              branchId: (data["branch_id"] ?? 0) as int,
+              canViewAll: data["can_view_all"] == true,
+            ),
+          ),
+        );
+      } else {
+        String msg = "শোরুম বদলানো যায়নি";
+        try {
+          msg = jsonDecode(utf8.decode(res.bodyBytes))["detail"] ?? msg;
+        } catch (_) {}
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(msg), backgroundColor: Colors.red),
+        );
+      }
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("সার্ভারের সাথে সংযোগ করা যায়নি"),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  /// শোরুম বাছাইয়ের ড্রপডাউন। একটা শোরুম হলে কিছু দেখায় না।
+  Widget _branchPicker() {
+    final items = <DropdownMenuItem<int>>[
+      if (widget.canViewAll)
+        const DropdownMenuItem<int>(value: 0, child: Text("সব শোরুম")),
+      ...widget.branches.map((b) => DropdownMenuItem<int>(
+            value: b["id"] as int,
+            child: Text("${b["name"]}", overflow: TextOverflow.ellipsis),
+          )),
+    ];
+    if (items.length < 2) return const SizedBox.shrink();
+
+    final valid = items.any((i) => i.value == widget.branchId);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<int>(
+          value: valid ? widget.branchId : null,
+          dropdownColor: kSidebarColor,
+          iconEnabledColor: Colors.white,
+          style: const TextStyle(
+              color: Colors.white, fontSize: 13.5, fontWeight: FontWeight.w600),
+          items: items,
+          onChanged: (v) {
+            if (v != null) _switchBranch(v);
+          },
+        ),
+      ),
+    );
+  }
+
+  void _logout() {
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(builder: (_) => const LoginScreen()),
+    );
+  }
+
+  void _onItemTap(int index, bool inDrawer) {
+    if (inDrawer) _scaffoldKey.currentState?.closeDrawer();
+    _go(index);
+  }
+
+  Widget _buildHeader({required bool collapsed, required bool inDrawer}) {
+    if (collapsed) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        child: Column(
+          children: [
+            const BrandMark(size: 38),
+            const SizedBox(height: 8),
+            IconButton(
+              tooltip: "মেনু খুলুন",
+              icon: const Icon(Icons.menu, color: Colors.white70),
+              onPressed: () {
+                setState(() {
+                  _collapsed = false;
+                });
+              },
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.fromLTRB(16, inDrawer ? 44 : 22, 6, 18),
+      child: Row(
+        children: [
+          const BrandMark(size: 44),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  kAppName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                      color: Colors.white, fontSize: 17, fontWeight: FontWeight.w800),
+                ),
+                const SizedBox(height: 4),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(
+                    widget.role,
+                    style: const TextStyle(color: Colors.white70, fontSize: 11),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (!inDrawer)
+            IconButton(
+              tooltip: "মেনু ভাঁজ করুন",
+              icon: const Icon(Icons.chevron_left, color: Colors.white70),
+              onPressed: () {
+                setState(() {
+                  _collapsed = true;
+                });
+              },
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _navTile({
+    required IconData icon,
+    required String title,
+    required bool selected,
+    required bool collapsed,
+    required VoidCallback onTap,
+    Color? iconColor,
+  }) {
+    final fg = selected ? Colors.white : (iconColor ?? Colors.white60);
+    final bg = selected ? Colors.white.withValues(alpha: 0.14) : Colors.transparent;
+
+    if (collapsed) {
+      return Tooltip(
+        message: title,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
+          child: Material(
+            color: bg,
+            borderRadius: BorderRadius.circular(10),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(10),
+              onTap: onTap,
+              child: SizedBox(
+                height: 44,
+                child: Center(child: Icon(icon, size: 21, color: fg)),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 1),
+      child: Material(
+        color: bg,
+        borderRadius: BorderRadius.circular(10),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            child: Row(
+              children: [
+                Icon(icon, size: 20, color: fg),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: selected ? Colors.white : Colors.white70,
+                      fontSize: 14,
+                      fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                    ),
+                  ),
+                ),
+                if (selected)
+                  Container(
+                    width: 4,
+                    height: 18,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF7FB2F0),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMenu({required bool collapsed, required bool inDrawer}) {
+    final visible = _visibleIndexes;
+
+    return Container(
+      width: inDrawer ? null : (collapsed ? _collapsedWidth : _expandedWidth),
+      color: kSidebarColor,
+      child: Column(
+        children: [
+          _buildHeader(collapsed: collapsed, inDrawer: inDrawer),
+          Expanded(
+            child: Scrollbar(
+              controller: _menuScroll,
+              thumbVisibility: true,
+              child: ListView.builder(
+                controller: _menuScroll,
+                padding: const EdgeInsets.only(bottom: 8),
+                itemCount: visible.length,
+                itemBuilder: (context, n) {
+                  final i = visible[n];
+                  final item = _items[i];
+                  return _navTile(
+                    icon: item.icon,
+                    title: item.title,
+                    selected: _selected == i,
+                    collapsed: collapsed,
+                    onTap: () => _onItemTap(i, inDrawer),
+                  );
+                },
+              ),
+            ),
+          ),
+          Divider(height: 1, color: Colors.white.withValues(alpha: 0.1)),
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: _navTile(
+              icon: Icons.logout,
+              title: "লগআউট",
+              selected: false,
+              collapsed: collapsed,
+              iconColor: const Color(0xFFFF9C9C),
+              onTap: () {
+                if (inDrawer) _scaffoldKey.currentState?.closeDrawer();
+                _logout();
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final narrow = constraints.maxWidth < _breakpoint;
+
+        // ফোনের ব্যাক বাটন চাপলে আগে ভেতরের পেজ বন্ধ হবে, অ্যাপ নয়
+        final content = NavigatorPopHandler(
+          onPop: () => _navKey.currentState?.maybePop(),
+          child: Navigator(
+            key: _navKey,
+            onGenerateInitialRoutes: _initialRoutes,
+            onGenerateRoute: (settings) => MaterialPageRoute(
+              builder: (_) => HomeScreen(token: widget.token, role: widget.role),
+            ),
+          ),
+        );
+
+        return Scaffold(
+          key: _scaffoldKey,
+          backgroundColor: const Color(0xFFF2F6FC),
+          appBar: narrow
+              ? AppBar(
+                  toolbarHeight: 48,
+                  titleSpacing: 0,
+                  leading: IconButton(
+                    tooltip: "মেনু",
+                    icon: const Icon(Icons.menu),
+                    onPressed: () => _scaffoldKey.currentState?.openDrawer(),
+                  ),
+                  title: Text(
+                    _items[_selected].title,
+                    style: const TextStyle(fontSize: 16),
+                  ),
+                  actions: [
+                    IconButton(
+                      tooltip: "গাড়ী খুঁজুন",
+                      icon: const Icon(Icons.search),
+                      onPressed: _openSearch,
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: Center(child: _branchPicker()),
+                    ),
+                  ],
+                )
+              : null,
+          drawer: narrow
+              ? Drawer(child: _buildMenu(collapsed: false, inDrawer: true))
+              : null,
+          body: Column(
+            children: [
+              if (!narrow)
+                _TopBar(
+                  title: _items[_selected].title,
+                  role: widget.role,
+                  onLogout: _logout,
+                  branchPicker: _branchPicker(),
+                  onSearch: _openSearch,
+                ),
+              Expanded(
+                child: narrow
+                    ? content
+                    : Row(
+                        children: [
+                          _buildMenu(collapsed: _collapsed, inDrawer: false),
+                          Expanded(child: content),
+                        ],
+                      ),
+              ),
+              const _FooterBar(),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+// ---------------------------------------------------------------
+// টপবার, ঘড়ি ও ফুটার
+// ---------------------------------------------------------------
+class _TopBar extends StatelessWidget {
+  final String title;
+  final String role;
+  final VoidCallback onLogout;
+  final Widget? branchPicker;
+  final VoidCallback? onSearch;
+
+  const _TopBar({
+    required this.title,
+    required this.role,
+    required this.onLogout,
+    this.branchPicker,
+    this.onSearch,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 60,
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      decoration: BoxDecoration(
+        color: kSidebarColor,
+        border: Border(bottom: BorderSide(color: Colors.white.withValues(alpha: 0.12))),
+      ),
+      child: Row(
+        children: [
+          Text(
+            title,
+            style: const TextStyle(
+                color: Colors.white, fontSize: 19, fontWeight: FontWeight.w800),
+          ),
+          const Spacer(),
+          if (onSearch != null) ...[
+            TextButton.icon(
+              onPressed: onSearch,
+              icon: const Icon(Icons.search, color: Colors.white),
+              label: const Text(
+                "গাড়ী খুঁজুন",
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+              ),
+            ),
+            const SizedBox(width: 16),
+          ],
+          if (branchPicker != null) ...[
+            branchPicker!,
+            const SizedBox(width: 22),
+          ],
+          const Icon(Icons.calendar_month, color: Colors.white70, size: 20),
+          const SizedBox(width: 6),
+          const _ClockText(showDate: true),
+          const SizedBox(width: 22),
+          const Icon(Icons.access_time, color: Colors.white70, size: 20),
+          const SizedBox(width: 6),
+          const _ClockText(showDate: false),
+          const SizedBox(width: 22),
+          const CircleAvatar(
+            radius: 18,
+            backgroundColor: Colors.white,
+            child: Icon(Icons.person, color: kBrandColor),
+          ),
+          const SizedBox(width: 8),
+          Text(role, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+          const SizedBox(width: 6),
+          IconButton(
+            tooltip: "লগআউট",
+            icon: const Icon(Icons.logout, color: Colors.white),
+            onPressed: onLogout,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ClockText extends StatefulWidget {
+  final bool showDate;
+  const _ClockText({required this.showDate});
+
+  @override
+  State<_ClockText> createState() => _ClockTextState();
+}
+
+class _ClockTextState extends State<_ClockText> {
+  Timer? _timer;
+  DateTime _now = DateTime.now();
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(seconds: 20), (_) {
+      if (mounted) {
+        setState(() {
+          _now = DateTime.now();
+        });
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  String _two(int n) => n.toString().padLeft(2, '0');
+
+  @override
+  Widget build(BuildContext context) {
+    String text;
+    if (widget.showDate) {
+      text = "তারিখ: ${_two(_now.day)}-${_two(_now.month)}-${_now.year}";
+    } else {
+      final h = _now.hour % 12 == 0 ? 12 : _now.hour % 12;
+      final ap = _now.hour >= 12 ? "PM" : "AM";
+      text = "সময়: ${_two(h)}:${_two(_now.minute)} $ap";
+    }
+    return Text(text, style: const TextStyle(color: Colors.white, fontSize: 13));
+  }
+}
+
+class _FooterBar extends StatefulWidget {
+  const _FooterBar();
+
+  @override
+  State<_FooterBar> createState() => _FooterBarState();
+}
+
+class _FooterBarState extends State<_FooterBar> {
+  Timer? _timer;
+  bool _ok = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _check();
+    _timer = Timer.periodic(const Duration(seconds: 30), (_) => _check());
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _check() async {
+    try {
+      await http.get(Uri.parse(apiBaseUrl)).timeout(const Duration(seconds: 4));
+      if (mounted) {
+        setState(() {
+          _ok = true;
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _ok = false;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    const s = TextStyle(fontSize: 12, color: Colors.black87);
+    final narrow = MediaQuery.of(context).size.width < 600;
+    return Container(
+      height: 30,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        border: Border(top: BorderSide(color: Color(0xFFD9E3F3))),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.circle, size: 10, color: _ok ? Colors.green : Colors.red),
+          const SizedBox(width: 6),
+          Text(_ok ? "Server: Connected" : "Server: Offline", style: s),
+          if (!narrow) ...[
+            const Text("   |   ", style: s),
+            Text("Backend: $apiBaseUrl", style: s),
+            const Text("   |   ", style: s),
+            const Text("Version: 1.0.0", style: s),
+          ],
+          const Spacer(),
+          const Flexible(
+            child: Text(
+              kAppName,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: kBrandColor),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
