@@ -2,17 +2,21 @@ import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 from dotenv import load_dotenv
+
 load_dotenv()
-DATABASE_URL = (os.getenv("DATABASE_URL") or "").strip().strip('"').strip("'")
-if DATABASE_URL.startswith("DATABASE_URL="):
-    DATABASE_URL = DATABASE_URL.split("=", 1)[1].strip()
 
-if DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+psycopg2://", 1)
-elif DATABASE_URL.startswith("postgresql://"):
-    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
+raw_url = os.getenv("DATABASE_URL") or ""
 
-if not DATABASE_URL.startswith(("postgresql://", "sqlite")):
+DATABASE_URL = raw_url.strip().strip('"').strip("'")
+if "DATABASE_URL=" in DATABASE_URL:
+    DATABASE_URL = DATABASE_URL.split("DATABASE_URL=")[-1].strip()
+
+for prefix in ("postgresql+psycopg2://", "postgresql://", "postgres://"):
+    if DATABASE_URL.startswith(prefix):
+        DATABASE_URL = "postgresql+psycopg2://" + DATABASE_URL[len(prefix):]
+        break
+
+if not DATABASE_URL.startswith(("postgresql+psycopg2://", "sqlite")):
     raise RuntimeError(
         "DATABASE_URL ভুল: শুরুর অংশ = %r, দৈর্ঘ্য = %d"
         % (DATABASE_URL[:8], len(DATABASE_URL))
