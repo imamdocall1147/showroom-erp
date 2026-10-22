@@ -1,3 +1,5 @@
+import 'branch_screen.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:async';
 import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
@@ -79,9 +81,11 @@ class ShowroomApp extends StatelessWidget {
 // অন্য কম্পিউটারে Windows অ্যাপ চালাতে হলে নিচের true বদলে false করুন।
 const bool _isServerPc = true;
 const String _tailscaleUrl = "http://100.120.82.27:8000";
-final String apiBaseUrl = (!_isServerPc || Platform.isAndroid || Platform.isIOS)
-    ? _tailscaleUrl
-    : "http://127.0.0.1:8000";
+final String apiBaseUrl = kIsWeb
+    ? "http://127.0.0.1:8000"
+    : ((!_isServerPc || Platform.isAndroid || Platform.isIOS)
+        ? _tailscaleUrl
+        : "http://127.0.0.1:8000");
 
 class LoginScreen extends StatefulWidget {
   final bool expired;
@@ -1247,6 +1251,10 @@ class _AppShellState extends State<AppShell> {
         (t) => PartnerScreen(token: t),
         roles: {'admin'}),
     
+    
+    _MenuItem(Icons.store, "শোরুম ব্যবস্থাপনা",
+        (t) => BranchScreen(token: t),
+        roles: {'admin'}),
   ];
 
   @override

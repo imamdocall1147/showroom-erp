@@ -1,10 +1,11 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 /// ক্যামেরা দিয়ে স্ক্যান শুধু ফোনে (Android/iPhone) চলে। পিসিতে চলে না।
 /// পিসিতে USB বারকোড/QR স্ক্যানার লাগালে সেটা কীবোর্ডের মতো লেখা বসিয়ে দেয়, আলাদা কিছু লাগে না।
-bool get canScanWithCamera => Platform.isAndroid || Platform.isIOS;
+bool get canScanWithCamera => !kIsWeb && (Platform.isAndroid || Platform.isIOS);
 
 /// ক্যামেরা খুলে একটা QR বা বারকোড পড়ে, পড়া লেখাটা ফেরত দেয় (বাতিল করলে null)।
 Future<String?> scanCodeOnce(BuildContext context) {

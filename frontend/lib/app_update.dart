@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -12,7 +13,7 @@ bool _checked = false;
 /// থাকলে "আপডেট করুন" জানালা দেখায়। প্রতিবার অ্যাপ চালুতে একবারই দেখে।
 /// পিসিতে কিছু করে না (পিসির অ্যাপ setup_erp.bat দিয়ে নতুন করে বানাতে হয়)।
 Future<void> checkForAppUpdate(BuildContext context) async {
-  if (_checked || !Platform.isAndroid) return;
+  if (_checked || kIsWeb || !Platform.isAndroid) return;
   _checked = true;
   try {
     final info = await PackageInfo.fromPlatform();

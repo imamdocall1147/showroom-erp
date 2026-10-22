@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:convert';
 import 'dart:io';
 import 'package:connectivity_plus/connectivity_plus.dart';
@@ -27,7 +28,7 @@ class SyncService {
   Future<Database> _initDb() async {
     // Windows/Linux-এ গ্লোবাল ফ্যাক্টরি না বদলে সরাসরি FFI ফ্যাক্টরি ব্যবহার
     final DatabaseFactory factory;
-    if (Platform.isWindows || Platform.isLinux) {
+    if (!kIsWeb && (Platform.isWindows || Platform.isLinux)) {
       sqfliteFfiInit();
       factory = databaseFactoryFfi;
     } else {

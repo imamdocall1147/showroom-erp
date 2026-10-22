@@ -369,7 +369,7 @@ class _WarehouseFormScreenState extends State<WarehouseFormScreen> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     DropdownButtonFormField<int>(
-                      initialValue: _selectedBranchId,
+                      value: _selectedBranchId,
                       decoration: const InputDecoration(
                         labelText: "শাখা",
                         border: OutlineInputBorder(),

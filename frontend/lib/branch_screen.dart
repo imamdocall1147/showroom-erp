@@ -140,6 +140,36 @@ class _BranchScreenState extends State<BranchScreen> {
     }
   }
 
+  Future<void> _delete(Map<String, dynamic> b) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text("শোরুম মুছবেন?"),
+        content: Text("'${b["name"]}' মুছে ফেলা হবে। এটি ফেরানো যাবে না।"),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("বাতিল")),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text("মুছুন"),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      final r = await http.delete(Uri.parse("$apiBaseUrl/branches/${b["id"]}"), headers: _headers);
+      if (r.statusCode == 200) {
+        _msg("শোরুম মুছে ফেলা হয়েছে। উপরের তালিকায় দেখতে আবার লগইন করুন");
+        _load();
+      } else {
+        _msg(_detail(r), bad: true);
+      }
+    } catch (_) {
+      _msg("সার্ভারের সাথে সংযোগ করা যায়নি", bad: true);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -169,10 +199,20 @@ class _BranchScreenState extends State<BranchScreen> {
                             leading: const Icon(Icons.store),
                             title: Text("${b["name"]}"),
                             subtitle: sub.isEmpty ? null : Text(sub),
-                            trailing: IconButton(
-                              icon: const Icon(Icons.edit),
-                              tooltip: "সম্পাদনা",
-                              onPressed: () => _openDialog(branch: b),
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                IconButton(
+                                  icon: const Icon(Icons.edit),
+                                  tooltip: "সম্পাদনা",
+                                  onPressed: () => _openDialog(branch: b),
+                                ),
+                                IconButton(
+                                  icon: const Icon(Icons.delete, color: Colors.red),
+                                  tooltip: "মুছুন",
+                                  onPressed: () => _delete(b),
+                                ),
+                              ],
                             ),
                           ),
                         );

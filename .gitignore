@@ -7,3 +7,7 @@ __pycache__/
 backend_backup*/
 fix_*.py
 patch_*.py
+backend/seed_admin.py
+
+.dart_tool/
+build/

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
@@ -379,7 +380,7 @@ class _ReportPdfScreenState extends State<ReportPdfScreen> {
   Future<void> _saveToDownloads() async {
     try {
       final bytes = await _buildPdf();
-      final home = Platform.environment['USERPROFILE'] ?? '';
+      final home = kIsWeb ? '' : (Platform.environment['USERPROFILE'] ?? '');
       if (home.isEmpty) {
         _snack("Downloads ফোল্ডার পাওয়া যায়নি");
         return;
@@ -536,7 +537,7 @@ class _ReportPdfScreenState extends State<ReportPdfScreen> {
                       icon: const Icon(Icons.restart_alt, size: 18),
                       label: const Text("রিসেট"),
                     ),
-                    if (Platform.isWindows) ...[
+                    if (!kIsWeb && Platform.isWindows) ...[
                       const SizedBox(width: 8),
                       ElevatedButton.icon(
                         onPressed: _saveToDownloads,

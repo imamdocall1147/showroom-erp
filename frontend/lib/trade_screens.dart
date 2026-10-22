@@ -18,6 +18,7 @@ class PurchaseScreen extends StatefulWidget {
 }
 
 class _PurchaseScreenState extends State<PurchaseScreen> {
+  DateTime _entryDate = DateTime.now();
   final _formKey = GlobalKey<FormState>();
   final _chassisController = TextEditingController();
   final _engineController = TextEditingController();
@@ -192,6 +193,7 @@ class _PurchaseScreenState extends State<PurchaseScreen> {
       "supplier_id": _selectedSupplierId,
       "advance_used": advance,
       "order_id": _selectedOrderId,
+      "purchase_date": _fmtYmd(_entryDate),
       "gate_pass_no": _gatePassController.text.trim().isEmpty
           ? null
           : _gatePassController.text.trim(),
@@ -236,7 +238,7 @@ class _PurchaseScreenState extends State<PurchaseScreen> {
             builder: (context) => InvoiceScreen(
               invoiceTitle: "ক্রয় ইনভয়েস",
               invoiceNumber: voucher,
-              date: DateTime.now(),
+              date: _entryDate,
               partyName: supplier != null ? supplier["name"] : "নগদ ক্রয়",
               partyPhone: supplier != null ? supplier["phone"] : null,
               paymentMode: _paymentMode,
@@ -360,6 +362,8 @@ class _PurchaseScreenState extends State<PurchaseScreen> {
                       validator: (value) => value == null ? "গোডাউন বেছে নিন" : null,
                     ),
                     const SizedBox(height: 16),
+                    buildEntryDateField(context, _entryDate, (d) => setState(() => _entryDate = d), "ক্রয়ের তারিখ"),
+                    const SizedBox(height: 12),
                     TextFormField(
                       controller: _chassisController,
                        decoration: InputDecoration(
@@ -625,6 +629,7 @@ class SellScreen extends StatefulWidget {
 }
 
 class _SellScreenState extends State<SellScreen> {
+  DateTime _entryDate = DateTime.now();
   final _formKey = GlobalKey<FormState>();
   late TextEditingController _priceController;
   final _decorationController = TextEditingController(text: "0");
@@ -734,6 +739,7 @@ class _SellScreenState extends State<SellScreen> {
           "customer_id": _selectedCustomerId,
           "payment_mode": _paymentMode,
           "paid_amount": _paymentMode == "due" ? _numOf(_paidController) : null,
+          "sale_date": _fmtYmd(_entryDate),
         },
         token: widget.token,
         description: "বাইক বিক্রয়: ${widget.unit['chassis_no']}",
@@ -773,7 +779,7 @@ class _SellScreenState extends State<SellScreen> {
             builder: (context) => InvoiceScreen(
               invoiceTitle: "বিক্রয় ইনভয়েস",
               invoiceNumber: "$voucherId",
-              date: DateTime.now(),
+              date: _entryDate,
               partyName: customer != null ? customer["name"] : "",
               partyPhone: customer != null ? customer["phone"] : null,
               paymentMode: _paymentMode,
@@ -919,6 +925,8 @@ class _SellScreenState extends State<SellScreen> {
                       validator: (value) => value == null ? "কাস্টমার বেছে নিন" : null,
                     ),
                     const SizedBox(height: 16),
+                    buildEntryDateField(context, _entryDate, (d) => setState(() => _entryDate = d), "বিক্রয়ের তারিখ"),
+                    const SizedBox(height: 12),
                     TextFormField(
                       controller: _priceController,
                       decoration: const InputDecoration(
@@ -1053,4 +1061,29 @@ class _SellScreenState extends State<SellScreen> {
             ),
     );
   }
+}
+
+String _fmtYmd(DateTime d) =>
+    "${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}";
+
+Widget buildEntryDateField(BuildContext context, DateTime value,
+    ValueChanged<DateTime> onChanged, String label) {
+  return InkWell(
+    onTap: () async {
+      final picked = await showDatePicker(
+        context: context,
+        initialDate: value,
+        firstDate: DateTime(2020),
+        lastDate: DateTime.now(),
+      );
+      if (picked != null) onChanged(picked);
+    },
+    child: InputDecorator(
+      decoration: InputDecoration(
+        labelText: label,
+        suffixIcon: const Icon(Icons.calendar_today),
+      ),
+      child: Text(_fmtYmd(value)),
+    ),
+  );
 }
