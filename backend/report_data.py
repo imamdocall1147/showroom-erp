@@ -12,7 +12,7 @@ Flutter অ্যাপের "রিপোর্ট" মেনু এই এন
 সক্রিয় শোরুম না থাকলে (সব শোরুম মোড) দুই শোরুমের যোগফল দেখায়।
 
 main.py-তে যোগ করতে হবে (get_current_user লেখার পরে):
-    from report_data import build_router
+    from backend.report_data import build_router
     app.include_router(build_router(get_current_user))
 """
 from datetime import datetime, timedelta
@@ -21,8 +21,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from database import get_db
-from models import (
+from backend.database import get_db
+from backend.models import (
     Account, Area, Branch, Brand, Party, Product, SparePart, Unit, Voucher,
     VoucherEntry, Warehouse,
 )
@@ -1203,7 +1203,7 @@ def r_business_growth(db, f, m):
 
 def r_advance_orders(db, f, m):
     try:
-        from models import AdvanceOrder, AdvancePayment  # noqa: F401
+        from backend.models import AdvanceOrder, AdvancePayment  # noqa: F401
     except ImportError:
         return message("অগ্রিম অর্ডার এখনো চালু করা হয়নি")
     q = db.query(AdvanceOrder)

@@ -1,3 +1,5 @@
+import os
+
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
@@ -7,15 +9,15 @@ from datetime import datetime, timedelta, date
 from jose import jwt, ExpiredSignatureError
 from backend.sms_service import send_sms
 from backend.advance_orders import build_advance_router
-from report_data import build_router
+from backend.report_data import build_router
 import os
 import bcrypt
 from dotenv import load_dotenv
-from master_data import build_master_router
+from backend.master_data import build_master_router
 
 
-from database import engine, get_db
-from models import (
+from backend.database import engine, get_db
+from backend.models import (
     Base, User, Role, Company, Branch, Warehouse,
     Brand, Product, Area, Party, Unit,
     Account, Voucher, VoucherEntry, SparePart, SupplierOrder,
@@ -54,7 +56,14 @@ def _ensure_new_columns():
 _ensure_new_columns()
 
 app = FastAPI(title="Showroom ERP")
-from app_update import build_update_router
+from fastapi.middleware.cors import CORSMiddleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+from backend.app_update import build_update_router
 app.include_router(build_update_router())
 SECRET_KEY = os.getenv("SECRET_KEY")
 security = HTTPBearer()
@@ -314,6 +323,7 @@ def list_companies(db: Session = Depends(get_db), current_user: User = Depends(g
 
 @app.post("/branches")
 def create_branch(payload: BranchCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    _branch_admin(current_user)
     company = db.query(Company).filter(Company.id == payload.company_id).first()
     if not company:
         raise HTTPException(status_code=404, detail="কোম্পানি পাওয়া যায়নি")
@@ -455,6 +465,22 @@ def list_parties(db: Session = Depends(get_db), current_user: User = Depends(get
     return db.query(Party).all()
 
 
+def parse_entry_date(value):
+    """'YYYY-MM-DD' থেকে datetime; খালি হলে এখনকার সময়। ভবিষ্যৎ তারিখ বন্ধ।"""
+    if not value:
+        return datetime.utcnow()
+    try:
+        d = datetime.strptime(value[:10], "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="তারিখের ফরম্যাট ভুল (YYYY-MM-DD)")
+    now = datetime.utcnow()
+    if d.date() > now.date():
+        raise HTTPException(status_code=400, detail="ভবিষ্যতের তারিখ দেওয়া যাবে না")
+    if d.date() == now.date():
+        return now
+    return d.replace(hour=12)
+
+
 class UnitPurchaseCreate(BaseModel):
     gate_pass_no: str | None = None  # গেট পাস নম্বর (ঐচ্ছিক)
     product_id: int
@@ -464,6 +490,7 @@ class UnitPurchaseCreate(BaseModel):
     color: str | None = None
     year: str | None = None
     purchase_price: int
+    purchase_date: str | None = None
     supplier_id: int | None = None
     payment_mode: str = "cash"
     advance_used: int = 0  # এই সাপ্লায়ারকে আগে দেওয়া অগ্রিম থেকে যত টাকা কাটা হবে
@@ -478,6 +505,7 @@ class UnitSellRequest(BaseModel):
     registration_cost: int = 0      # রেজিস্ট্রেশন খরচ
     paid_amount: int | None = None  # বাকিতে বিক্রয়ে এখন যত টাকা জমা নেওয়া হচ্ছে
     partner_id: int | None = None   # কোন পার্টনারের বিক্রয় (তার হিসাব থেকে বাদ যাবে)
+    sale_date: str | None = None
 
 
 class BrtaUpdate(BaseModel):
@@ -622,6 +650,7 @@ def purchase_unit(payload: UnitPurchaseCreate, db: Session = Depends(get_db), cu
         if received_before >= order.qty:
             raise HTTPException(status_code=400, detail="এই অর্ডারের সব ইউনিট আগেই এসে গেছে")
 
+    entry_dt = parse_entry_date(payload.purchase_date)
     unit = Unit(
         product_id=payload.product_id,
         warehouse_id=payload.warehouse_id,
@@ -633,6 +662,7 @@ def purchase_unit(payload: UnitPurchaseCreate, db: Session = Depends(get_db), cu
         supplier_id=payload.supplier_id,
         supplier_order_id=order.id if order else None,
         gate_pass_no=(payload.gate_pass_no or "").strip() or None,
+        purchase_date=entry_dt,
         status="in_stock",
     )
     db.add(unit)
@@ -651,6 +681,7 @@ def purchase_unit(payload: UnitPurchaseCreate, db: Session = Depends(get_db), cu
         voucher_type="purchase",
         narration=f"Unit #{unit.id} ({unit.chassis_no}) ক্রয়",
         reference=unit.chassis_no,
+        voucher_date=entry_dt,
     )
     db.add(voucher)
     db.commit()
@@ -816,12 +847,14 @@ def sell_unit(unit_id: int, payload: UnitSellRequest, db: Session = Depends(get_
             raise HTTPException(status_code=400, detail="জমা মোট মূল্যের কম হতে হবে। পুরো টাকা নিলে 'নগদ' বেছে নিন")
     due_amount = total_price - paid_now
 
+    entry_dt = parse_entry_date(payload.sale_date)
     unit.status = "sold"
     unit.sold_price = bike_price
     unit.decoration_cost = decoration
     unit.registration_cost = registration
-    unit.sold_date = datetime.utcnow()
+    unit.sold_date = entry_dt
     unit.customer_id = payload.customer_id
+    unit.sold_by_partner_id = payload.partner_id
 
     income_account = get_or_create_account(db, "Sales Income", "income", branch_id)
 
@@ -829,6 +862,7 @@ def sell_unit(unit_id: int, payload: UnitSellRequest, db: Session = Depends(get_
         voucher_type="sale",
         narration=f"Unit #{unit.id} ({unit.chassis_no}) বিক্রয়",
         reference=unit.chassis_no,
+        voucher_date=entry_dt,
     )
     db.add(voucher)
     db.commit()
@@ -1676,7 +1710,7 @@ def list_stock_transfers(db: Session = Depends(get_db), current_user: User = Dep
             "note": r.note,
         })
     return result
-from investors import build_investor_router
+from backend.investors import build_investor_router
 app.include_router(build_investor_router(get_db, get_current_user, engine))
 
 
@@ -1974,3 +2008,66 @@ def supplier_deliveries(month: str | None = None, db: Session = Depends(get_db),
         "open_orders_remaining": sum(r["remaining"] for r in open_rows),
         "open_orders": open_rows,
     }
+
+
+# ---------------------------------------------------------------
+# শোরুম যোগ ও সম্পাদনা (শুধু অ্যাডমিন)
+# ---------------------------------------------------------------
+class BranchUpdate(BaseModel):
+    name: str
+    address: str | None = None
+    phone: str | None = None
+
+
+def _branch_admin(user):
+    role_name = (user.role.name if getattr(user, "role", None) else "") or ""
+    if role_name.strip().lower() != "admin":
+        raise HTTPException(status_code=403, detail="শুধু অ্যাডমিন শোরুম যোগ বা সম্পাদনা করতে পারবেন")
+
+
+@app.put("/branches/{branch_id}")
+def update_branch(branch_id: int, payload: BranchUpdate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    _branch_admin(current_user)
+    branch = db.query(Branch).filter(Branch.id == branch_id).first()
+    if not branch:
+        raise HTTPException(status_code=404, detail="শোরুম পাওয়া যায়নি")
+    name = (payload.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="শোরুমের নাম লিখুন")
+    dup = db.query(Branch).filter(Branch.name == name, Branch.id != branch_id).first()
+    if dup:
+        raise HTTPException(status_code=400, detail="এই নামে আরেকটি শোরুম আছে")
+    branch.name = name
+    branch.address = (payload.address or "").strip() or None
+    branch.phone = (payload.phone or "").strip() or None
+    db.commit()
+    db.refresh(branch)
+    return branch
+
+
+@app.delete("/branches/{branch_id}")
+def delete_branch(branch_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    _branch_admin(current_user)
+    branch = db.query(Branch).filter(Branch.id == branch_id).first()
+    if not branch:
+        raise HTTPException(status_code=404, detail="শোরুম পাওয়া যায়নি")
+    if db.query(Branch).count() <= 1:
+        raise HTTPException(status_code=400, detail="শেষ শোরুম মোছা যাবে না")
+    used = []
+    for table in Base.metadata.sorted_tables:
+        if table.name == "branches":
+            continue
+        for col in table.columns:
+            if col.name in ("branch_id", "from_branch_id", "to_branch_id"):
+                n = db.query(func.count()).select_from(table).filter(col == branch_id).scalar()
+                if n:
+                    used.append(table.name)
+                    break
+    if used:
+        raise HTTPException(
+            status_code=400,
+            detail="এই শোরুমে ডাটা আছে, তাই মোছা যাবে না (" + ", ".join(used) + ")",
+        )
+    db.delete(branch)
+    db.commit()
+    return {"ok": True}

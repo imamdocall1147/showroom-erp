@@ -19,8 +19,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from database import get_db
-from models import Account, Branch, Party, SupplierOrder, Unit, Voucher, VoucherEntry, Warehouse
+from backend.database import get_db
+from backend.models import Account, Branch, Party, SupplierOrder, Unit, Voucher, VoucherEntry, Warehouse
 
 ADV = "Supplier Advances"
 PAY = "Accounts Payable"

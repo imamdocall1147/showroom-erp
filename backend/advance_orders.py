@@ -21,11 +21,11 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from backend.database import get_db
-from models import (
+from backend.models import (
     Account, AdvanceOrder, AdvancePayment, Brand, Party, Product, Unit,
     Voucher, VoucherEntry,
 )
-from sms_service import send_sms
+from backend.sms_service import send_sms
 
 LOCAL_OFFSET = timedelta(hours=6)  # বাংলাদেশ = UTC+6, ডাটাবেসে সময় UTC-তে
 ADVANCE_ACCOUNT = "Customer Advances"

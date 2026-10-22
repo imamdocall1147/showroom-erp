@@ -5,7 +5,7 @@
 শুধু অ্যাডমিন দেখতে ও বদলাতে পারে।
 
 main.py-র একদম শেষে এই দুটো লাইন যোগ করুন:
-    from investors import build_investor_router
+    from backend.investors import build_investor_router
     app.include_router(build_investor_router(get_db, get_current_user, engine))
 """
 from datetime import date, datetime
@@ -16,7 +16,7 @@ from pydantic import BaseModel
 from sqlalchemy import Boolean, Column, Date, DateTime, ForeignKey, Integer, Numeric, String, func
 from sqlalchemy.orm import Session
 
-from models import Base
+from backend.models import Base
 
 
 class Investor(Base):

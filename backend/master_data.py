@@ -8,8 +8,8 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 import bcrypt
 
-from database import get_db
-from models import (
+from backend.database import get_db
+from backend.models import (
     Base, User, Role, Branch, Warehouse, Brand, Product, Area, Party,
     Unit, SparePart, Account, Voucher, VoucherEntry, AdvanceOrder, SupplierOrder,
 )
