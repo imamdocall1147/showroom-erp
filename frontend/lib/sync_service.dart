@@ -35,8 +35,14 @@ class SyncService {
       factory = databaseFactory;
     }
 
-    final dbPath = await factory.getDatabasesPath();
-    final path = join(dbPath, "showroom_offline.db");
+   final String path;
+if (kIsWeb) {
+  // ওয়েবে getDatabasesPath কাজ করে না, তাই শুধু ডাটাবেসের নাম
+  path = "showroom_offline.db";
+} else {
+  final dbPath = await factory.getDatabasesPath();
+  path = join(dbPath, "showroom_offline.db");
+}
 
     return factory.openDatabase(
       path,
@@ -133,6 +139,16 @@ class SyncService {
         Uri.parse("$apiBaseUrl$endpoint"),
         headers: {"Authorization": "Bearer $token"},
       ).timeout(const Duration(seconds: 5));
+            if (kIsWeb) {
+        // ওয়েবে ক্যাশ ডাটাবেস ব্যবহার হয় না, সরাসরি সার্ভারের ডেটা
+        if (response.statusCode == 200) {
+          return {
+            "data": jsonDecode(utf8.decode(response.bodyBytes)),
+            "fromCache": false,
+          };
+        }
+        return {"data": null, "fromCache": false};
+      }
 
       if (response.statusCode == 200) {
         final text = utf8.decode(response.bodyBytes);
@@ -140,7 +156,7 @@ class SyncService {
         return {"data": jsonDecode(text), "fromCache": false};
       }
     } catch (e) {
-      // নিচে ক্যাশ থেকে নেওয়া হবে
+     if (kIsWeb) return {"data": null, "fromCache": false};// নিচে ক্যাশ থেকে নেওয়া হবে
     }
     final cached = await _loadCache(key);
     return {"data": cached, "fromCache": true};
@@ -148,6 +164,7 @@ class SyncService {
 
   /// অ্যাপ খোলার সময় নীরবে সব দরকারি তালিকা আপডেট করে রাখা
   Future<void> refreshCaches(String token) async {
+    if (kIsWeb) return; // ওয়েবে ক্যাশ ব্যবহার হয় না
     for (final endpoint in ["/products", "/warehouses", "/parties"]) {
       await getList(endpoint, token);
     }
@@ -243,6 +260,8 @@ class SyncService {
   }
 
   Future<int> pendingCount() async {
+    if (kIsWeb) return 0;
+
     final db = await database;
     final result =
         await db.rawQuery("SELECT COUNT(*) as count FROM pending_actions");
@@ -250,6 +269,7 @@ class SyncService {
   }
 
   Future<List<Map<String, dynamic>>> getPendingActions() async {
+    if (kIsWeb) return [];
     final db = await database;
     return db.query("pending_actions", orderBy: "created_at ASC");
   }
@@ -262,6 +282,7 @@ class SyncService {
   /// - 401/403/5xx বা নেটওয়ার্ক সমস্যা → এন্ট্রি রেখে দেওয়া হয়, সিঙ্ক থামে (stopped = true)
   /// - অন্য 4xx (যেমন ডুপ্লিকেট চেসিস) → ব্যর্থ গণ্য, মুছে ফেলা হয়, কারণ errors-এ থাকে
   Future<Map<String, dynamic>> syncPendingActions(String token) async {
+    if (kIsWeb) return {"success": 0, "failed": 0, "errors": <String>[]};
     int success = 0;
     int failed = 0;
     final List<String> errors = [];

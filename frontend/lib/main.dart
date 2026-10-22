@@ -40,21 +40,24 @@ import 'investor_screen.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'stock_transfer_screen.dart';
 import 'partner_screen.dart';
+import 'db_init.dart';
 
 void main() {
-  // টোকেনের মেয়াদ শেষ হলে (৪০১) যেকোনো স্ক্রিন থেকে নিজে লগইন পাতায় ফেরা
-  AuthGuard.onExpired = () {
-    final nav = appNavigatorKey.currentState;
-    if (nav == null) return;
-    nav.pushAndRemoveUntil(
-      MaterialPageRoute(builder: (_) => const LoginScreen(expired: true)),
-      (route) => false,
-    );
-  };
-  // সব http.get/post কলে ৪০১ ধরার জন্য
   http.runWithClient(
     () {
       WidgetsFlutterBinding.ensureInitialized();
+      initDatabaseFactory();
+
+      // টোকেনের মেয়াদ শেষ হলে (৪০১) যেকোনো স্ক্রিন থেকে নিজে লগইন পাতায় ফেরা
+      AuthGuard.onExpired = () {
+        final nav = appNavigatorKey.currentState;
+        if (nav == null) return;
+        nav.pushAndRemoveUntil(
+          MaterialPageRoute(builder: (_) => const LoginScreen(expired: true)),
+          (route) => false,
+        );
+      };
+
       runApp(const ShowroomApp());
     },
     () => AuthClient(http.Client()),
@@ -80,12 +83,12 @@ class ShowroomApp extends StatelessWidget {
 // ফোনে আর অন্য কম্পিউটারে Tailscale-এর ঠিকানা ব্যবহার হয়।
 // অন্য কম্পিউটারে Windows অ্যাপ চালাতে হলে নিচের true বদলে false করুন।
 const bool _isServerPc = true;
-const String _tailscaleUrl = "http://100.120.82.27:8000";
+const String _tailscaleUrl = "https://showroom-erp.onrender.com";
 final String apiBaseUrl = kIsWeb
-    ? "http://127.0.0.1:8000"
+    ? "https://showroom-erp.onrender.com"
     : ((!_isServerPc || Platform.isAndroid || Platform.isIOS)
         ? _tailscaleUrl
-        : "http://127.0.0.1:8000");
+        : "https://showroom-erp.onrender.com");
 
 class LoginScreen extends StatefulWidget {
   final bool expired;
@@ -117,7 +120,7 @@ class _LoginScreenState extends State<LoginScreen> {
     super.dispose();
   }
 
-  Future<void> _login() async {
+    Future<void> _login() async {
     setState(() {
       _isLoading = true;
       _errorMessage = null;
@@ -557,7 +560,7 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Future<void> _loadStock() async {
+    Future<void> _loadStock() async {
     setState(() {
       _isLoading = true;
       _errorMessage = null;
@@ -579,10 +582,11 @@ class _HomeScreenState extends State<HomeScreen> {
           _errorMessage = "স্টক তালিকা আনতে সমস্যা হয়েছে";
         });
       }
-    } catch (e) {
+    } catch (e, st) {
+      debugPrint("STOCK ERROR: $e\n$st");
       if (!mounted) return;
       setState(() {
-        _errorMessage = "সার্ভারের সাথে সংযোগ করা যায়নি";
+        _errorMessage = "সার্ভারের সাথে সংযোগ করা যায়নি\n$e";
       });
     } finally {
       if (mounted) {
