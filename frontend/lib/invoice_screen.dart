@@ -610,7 +610,7 @@ class _InvoiceScreenState extends State<InvoiceScreen> {
           ),
           Row(
             children: [
-              _cell(0, const SizedBox(), h: 112),
+              _cell(0, const SizedBox(), h: 120),
               _cell(
                 1,
                 Padding(
@@ -624,11 +624,11 @@ class _InvoiceScreenState extends State<InvoiceScreen> {
                     ],
                   ),
                 ),
-                h: 112,
+                h: 120,
               ),
-              _cell(2, _top(_g('qty')), h: 112),
-              _cell(3, _top(_g('rate')), h: 112),
-              _cell(4, _top(_g('taka')), h: 112),
+              _cell(2, _top(_g('qty')), h: 120),
+              _cell(3, _top(_g('rate')), h: 120),
+              _cell(4, _top(_g('taka')), h: 120),
             ],
           ),
           ...extra,
