@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 from backend.master_data import build_master_router
 
 
+
 from backend.database import engine, get_db
 from backend.models import (
     Base, User, Role, Company, Branch, Warehouse,
@@ -164,6 +165,9 @@ app.include_router(build_advance_router(get_current_user))
 
 app.include_router(build_master_router(get_current_user))
 
+@app.head("/")
+def head_root():
+    return {}
 
 @app.get("/")
 def root():
@@ -2071,3 +2075,245 @@ def delete_branch(branch_id: int, db: Session = Depends(get_db), current_user: U
     db.delete(branch)
     db.commit()
     return {"ok": True}
+# ---------------------------------------------------------------
+# কাস্টমারের পূর্বের বকেয়া (হিসাব শুরুর আগের পাওনা)
+# ---------------------------------------------------------------
+class OpeningBalanceRequest(BaseModel):
+    amount: int
+    balance_date: str | None = None
+
+
+def _find_opening_voucher(db: Session, party_id: int, rec_account_id: int):
+    return (
+        db.query(Voucher)
+        .join(VoucherEntry, VoucherEntry.voucher_id == Voucher.id)
+        .filter(
+            Voucher.voucher_type == "opening",
+            Voucher.reference == f"opening-{party_id}",
+            VoucherEntry.account_id == rec_account_id,
+        )
+        .first()
+    )
+
+
+@app.get("/parties/{party_id}/opening-balance")
+def get_opening_balance(party_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    bid = scope_branch(current_user)
+    ids = account_ids_in_scope(db, "Accounts Receivable", bid)
+    total = 0
+    if ids:
+        v_ids = [
+            v.id for v in db.query(Voucher).filter(
+                Voucher.voucher_type == "opening",
+                Voucher.reference == f"opening-{party_id}",
+            ).all()
+        ]
+        if v_ids:
+            total = int(
+                db.query(func.coalesce(func.sum(VoucherEntry.debit), 0))
+                .filter(
+                    VoucherEntry.voucher_id.in_(v_ids),
+                    VoucherEntry.account_id.in_(ids),
+                    VoucherEntry.party_id == party_id,
+                )
+                .scalar() or 0
+            )
+    return {"amount": total}
+
+
+@app.put("/parties/{party_id}/opening-balance")
+def set_opening_balance(party_id: int, payload: OpeningBalanceRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """পূর্বের বকেয়া বসায়। আগে দেওয়া থাকলে অঙ্ক বদলে দেয়। ০ দিলে মুছে যায়।"""
+    branch_id = require_branch(current_user)
+    party = db.query(Party).filter(Party.id == party_id).first()
+    if not party or party.party_type != "customer":
+        raise HTTPException(status_code=404, detail="কাস্টমার পাওয়া যায়নি")
+    if payload.amount < 0:
+        raise HTTPException(status_code=400, detail="অঙ্ক ঋণাত্মক হতে পারবে না")
+
+    rec = get_or_create_account(db, "Accounts Receivable", "receivable", branch_id)
+    existing = _find_opening_voucher(db, party_id, rec.id)
+
+    if payload.amount == 0:
+        if existing:
+            db.query(VoucherEntry).filter(VoucherEntry.voucher_id == existing.id).delete()
+            db.delete(existing)
+            db.commit()
+        return {"amount": 0}
+
+    equity = get_or_create_account(db, "Opening Balance", "equity", branch_id)
+
+    if existing:
+        for e in db.query(VoucherEntry).filter(VoucherEntry.voucher_id == existing.id).all():
+            if e.account_id == rec.id:
+                e.debit, e.credit = payload.amount, 0
+            elif e.account_id == equity.id:
+                e.debit, e.credit = 0, payload.amount
+        if payload.balance_date:
+            existing.voucher_date = parse_entry_date(payload.balance_date)
+        db.commit()
+        return {"amount": payload.amount, "voucher_id": existing.id}
+
+    voucher = Voucher(
+        voucher_type="opening",
+        narration=f"{party.name} — পূর্বের বকেয়া",
+        reference=f"opening-{party_id}",
+        voucher_date=parse_entry_date(payload.balance_date),
+    )
+    db.add(voucher)
+    db.commit()
+    db.refresh(voucher)
+    db.add(VoucherEntry(voucher_id=voucher.id, account_id=rec.id, party_id=party_id, debit=payload.amount, credit=0))
+    db.add(VoucherEntry(voucher_id=voucher.id, account_id=equity.id, party_id=party_id, debit=0, credit=payload.amount))
+    db.commit()
+    return {"amount": payload.amount, "voucher_id": voucher.id}
+# ---------------------------------------------------------------
+# বিক্রয় ইনভয়েস এডিট (শুধু অ্যাডমিন)
+# ---------------------------------------------------------------
+def _sale_admin(user):
+    role_name = (user.role.name if getattr(user, "role", None) else "") or ""
+    if role_name.strip().lower() != "admin":
+        raise HTTPException(status_code=403, detail="শুধু অ্যাডমিন বিক্রয় ইনভয়েস এডিট করতে পারবেন")
+
+
+class SaleEditRequest(BaseModel):
+    customer_id: int
+    sold_price: int
+    decoration_cost: int = 0
+    registration_cost: int = 0
+    paid_amount: int | None = None  # খালি = পুরো টাকা জমা (নগদ)
+    sale_date: str | None = None
+    partner_id: int | None = None
+
+
+def _sale_voucher_of(db: Session, unit):
+    return (
+        db.query(Voucher)
+        .filter(Voucher.voucher_type == "sale", Voucher.reference == unit.chassis_no)
+        .order_by(Voucher.id)
+        .first()
+    )
+
+
+def _sale_dict(db: Session, u):
+    local = timedelta(hours=6)
+    total = (u.sold_price or 0) + (u.decoration_cost or 0) + (u.registration_cost or 0)
+    v = _sale_voucher_of(db, u)
+    due = 0
+    if v:
+        due = int(
+            db.query(func.coalesce(func.sum(VoucherEntry.debit), 0))
+            .join(Account, Account.id == VoucherEntry.account_id)
+            .filter(VoucherEntry.voucher_id == v.id, Account.name == "Accounts Receivable")
+            .scalar() or 0
+        )
+    cust = db.query(Party).filter(Party.id == u.customer_id).first() if u.customer_id else None
+    return {
+        "unit_id": u.id,
+        "chassis_no": u.chassis_no,
+        "engine_no": u.engine_no,
+        "brand": u.product.brand.name if u.product and u.product.brand else None,
+        "model": u.product.model_name if u.product else None,
+        "customer_id": u.customer_id,
+        "customer_name": cust.name if cust else None,
+        "sold_price": u.sold_price or 0,
+        "decoration_cost": u.decoration_cost or 0,
+        "registration_cost": u.registration_cost or 0,
+        "total": total,
+        "paid": max(total - due, 0),
+        "due": due,
+        "sale_date": (u.sold_date + local).strftime("%Y-%m-%d") if u.sold_date else None,
+        "partner_id": u.sold_by_partner_id,
+        "invoice_no": v.id if v else None,
+    }
+
+
+@app.get("/sales")
+def list_sales(q: str = "", db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    bid = scope_branch(current_user)
+    query = units_query(db, bid).filter(Unit.status == "sold")
+    term = (q or "").strip()
+    if term:
+        like = f"%{term}%"
+        query = query.filter(or_(
+            Unit.chassis_no.ilike(like),
+            Unit.engine_no.ilike(like),
+            Unit.customer_id.in_(db.query(Party.id).filter(Party.name.ilike(like))),
+        ))
+    units = query.order_by(Unit.sold_date.desc()).limit(60).all()
+    return [_sale_dict(db, u) for u in units]
+
+
+@app.put("/units/{unit_id}/sale")
+def edit_sale(unit_id: int, payload: SaleEditRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    _sale_admin(current_user)
+    unit = db.query(Unit).filter(Unit.id == unit_id).first()
+    if not unit or unit.status != "sold":
+        raise HTTPException(status_code=404, detail="বিক্রি হওয়া গাড়ী পাওয়া যায়নি")
+
+    branch_id = unit.warehouse.branch_id if unit.warehouse else None
+    bid = scope_branch(current_user)
+    if bid and branch_id != bid:
+        raise HTTPException(status_code=400, detail="এই গাড়ী অন্য শোরুমের")
+
+    if not db.query(Party).filter(Party.id == payload.customer_id).first():
+        raise HTTPException(status_code=404, detail="কাস্টমার পাওয়া যায়নি")
+    if payload.sold_price <= 0:
+        raise HTTPException(status_code=400, detail="বাইকের মূল্য ০-এর বেশি হতে হবে")
+    if payload.decoration_cost < 0 or payload.registration_cost < 0:
+        raise HTTPException(status_code=400, detail="খরচের পরিমাণ ঋণাত্মক হতে পারবে না")
+
+    bike = payload.sold_price
+    deco = payload.decoration_cost
+    reg = payload.registration_cost
+    total = bike + deco + reg
+    paid = total if payload.paid_amount is None else payload.paid_amount
+    if paid < 0:
+        raise HTTPException(status_code=400, detail="জমা ঋণাত্মক হতে পারবে না")
+    if paid > total:
+        raise HTTPException(status_code=400, detail="জমা মোট মূল্যের বেশি হতে পারবে না")
+    due = total - paid
+
+    # তারিখ একই থাকলে আগের সময়ই থাকবে
+    local = timedelta(hours=6)
+    old_day = (unit.sold_date + local).strftime("%Y-%m-%d") if unit.sold_date else None
+    if payload.sale_date and payload.sale_date[:10] != old_day:
+        unit.sold_date = parse_entry_date(payload.sale_date)
+
+    unit.sold_price = bike
+    unit.decoration_cost = deco
+    unit.registration_cost = reg
+    unit.customer_id = payload.customer_id
+    unit.sold_by_partner_id = payload.partner_id
+
+    voucher = _sale_voucher_of(db, unit)
+    if voucher:
+        db.query(VoucherEntry).filter(VoucherEntry.voucher_id == voucher.id).delete()
+        voucher.voucher_date = unit.sold_date
+    else:
+        voucher = Voucher(
+            voucher_type="sale",
+            narration=f"Unit #{unit.id} ({unit.chassis_no}) বিক্রয়",
+            reference=unit.chassis_no,
+            voucher_date=unit.sold_date,
+        )
+        db.add(voucher)
+        db.flush()
+
+    income = get_or_create_account(db, "Sales Income", "income", branch_id)
+    if paid > 0:
+        cash = get_or_create_account(db, "Cash", "cash", branch_id)
+        db.add(VoucherEntry(voucher_id=voucher.id, account_id=cash.id, party_id=payload.customer_id, debit=paid, credit=0))
+    if due > 0:
+        rec = get_or_create_account(db, "Accounts Receivable", "receivable", branch_id)
+        db.add(VoucherEntry(voucher_id=voucher.id, account_id=rec.id, party_id=payload.customer_id, debit=due, credit=0))
+    db.add(VoucherEntry(voucher_id=voucher.id, account_id=income.id, debit=0, credit=bike))
+    if deco > 0:
+        da = get_or_create_account(db, "Decoration Income", "income", branch_id)
+        db.add(VoucherEntry(voucher_id=voucher.id, account_id=da.id, debit=0, credit=deco))
+    if reg > 0:
+        ra = get_or_create_account(db, "Registration Income", "income", branch_id)
+        db.add(VoucherEntry(voucher_id=voucher.id, account_id=ra.id, debit=0, credit=reg))
+    db.commit()
+    db.refresh(unit)
+    return _sale_dict(db, unit)
