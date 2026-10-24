@@ -1,7 +1,8 @@
 import 'dart:convert';
 import 'dart:typed_data';
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show rootBundle;
+import 'package:flutter/rendering.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
@@ -151,8 +152,9 @@ const List<Color> _palette = [
 
 // ---------------------------------------------------------------
 // ইনভয়েস / মেমো স্ক্রিন
+// • লেখা Flutter দিয়ে আঁকা হয় (বাংলা যুক্তাক্ষর ঠিক থাকে), তারপর ছবি করে PDF হয়।
 // • এডিট শুধু এই কপিতে থাকে, হিসাব/ব্যালান্স/রিপোর্টে কিছু বদলায় না।
-// • সংরক্ষণ হয় এই ডিভাইসে (SharedPreferences)।
+// • সংরক্ষণ হয় এই ডিভাইসে/ব্রাউজারে (SharedPreferences)।
 // ---------------------------------------------------------------
 class InvoiceScreen extends StatefulWidget {
   final String invoiceTitle;
@@ -173,7 +175,6 @@ class InvoiceScreen extends StatefulWidget {
   /// বিক্রয়ে "ক্রেতার স্বাক্ষর", ক্রয়ে "বিক্রেতার স্বাক্ষর"
   final String partySignatureLabel;
 
-  // ---- নতুন (সব ঐচ্ছিক) ----
   /// প্রতিটা মেমোর আলাদা সংরক্ষণের চাবি, যেমন "sale_123"। না দিলে শিরোনাম+নম্বর থেকে হয়।
   final String? storageKey;
   final String? address;
@@ -216,14 +217,16 @@ class InvoiceScreen extends StatefulWidget {
 }
 
 class _InvoiceScreenState extends State<InvoiceScreen> {
+  static const double _w = 794;
+  static const double _h = 1123;
+  static const List<int> _fx = [10, 60, 12, 20, 24];
+
+  final GlobalKey _boundary = GlobalKey();
   Map<String, String> _v = {};
   Color _ink = const Color(0xFF000000);
   Color _accent = const Color(0xFF000000);
-  pw.Font? _reg;
-  pw.Font? _bold;
   bool _loading = true;
-  String? _error;
-  int _gen = 0;
+  bool _busy = false;
 
   String get _key => widget.storageKey ?? "inv_${widget.invoiceTitle}_${widget.invoiceNumber}";
 
@@ -279,21 +282,6 @@ class _InvoiceScreenState extends State<InvoiceScreen> {
   }
 
   Future<void> _load() async {
-    try {
-      final reg = await rootBundle.load("assets/fonts/NotoSansBengali-Regular.ttf");
-      final bold = await rootBundle.load("assets/fonts/NotoSansBengali-Bold.ttf");
-      _reg = pw.Font.ttf(reg);
-      _bold = pw.Font.ttf(bold);
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _error = "বাংলা ফন্ট লোড হয়নি: $e";
-          _loading = false;
-        });
-      }
-      return;
-    }
-
     Map<String, dynamic> t = {};
     Map<String, dynamic> m = {};
     try {
@@ -347,410 +335,481 @@ class _InvoiceScreenState extends State<InvoiceScreen> {
       _v = res.values;
       _ink = res.ink;
       _accent = res.accent;
-      _gen++;
     });
     await _save();
   }
 
-  // ---------------- PDF ----------------
-  Future<Uint8List> _generatePdf(PdfPageFormat format) async {
-    final reg = _reg!;
-    final bold = _bold!;
-    final ink = PdfColor.fromInt(_ink.toARGB32());
-    final accent = PdfColor.fromInt(_accent.toARGB32());
-    String g(String k) => _v[k] ?? '';
-
-    pw.TextStyle st(double size, {bool b = false, PdfColor? c}) =>
-        pw.TextStyle(fontSize: size, color: c ?? ink, font: b ? bold : reg);
-
-    pw.Widget dashed() => pw.Divider(
-          height: 3,
-          thickness: 0.8,
-          color: ink,
-          borderStyle: pw.BorderStyle.dashed,
-        );
-
-    pw.Widget field(String label, String value, {double labelW = 80, double top = 7}) {
-      return pw.Padding(
-        padding: pw.EdgeInsets.only(top: top),
-        child: pw.Row(
-          crossAxisAlignment: pw.CrossAxisAlignment.end,
-          children: [
-            pw.SizedBox(width: labelW, child: pw.Text(label, style: st(11, b: true))),
-            pw.Expanded(
-              child: pw.Column(
-                crossAxisAlignment: pw.CrossAxisAlignment.stretch,
-                children: [
-                  pw.Text(value.isEmpty ? ' ' : value, style: st(12.5)),
-                  dashed(),
-                ],
-              ),
+  // ---------------- PDF (পাতার ছবি তুলে) ----------------
+  Future<void> _openPdf() async {
+    setState(() => _busy = true);
+    try {
+      final ro = _boundary.currentContext?.findRenderObject();
+      if (ro is! RenderRepaintBoundary) return;
+      final img = await ro.toImage(pixelRatio: 2.5);
+      final bd = await img.toByteData(format: ui.ImageByteFormat.png);
+      if (bd == null) return;
+      final image = pw.MemoryImage(bd.buffer.asUint8List());
+      final doc = pw.Document();
+      doc.addPage(
+        pw.Page(
+          pageFormat: PdfPageFormat.a4,
+          margin: pw.EdgeInsets.zero,
+          build: (_) => pw.Image(image, fit: pw.BoxFit.fill),
+        ),
+      );
+      final Uint8List bytes = await doc.save();
+      if (!mounted) return;
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => Scaffold(
+            appBar: AppBar(title: Text(widget.invoiceTitle)),
+            body: PdfPreview(
+              build: (_) async => bytes,
+              pdfFileName: "invoice_${widget.invoiceNumber}.pdf",
+              canChangeOrientation: false,
+              canChangePageFormat: false,
+              canDebug: false,
             ),
-          ],
+          ),
         ),
       );
-    }
-
-    const fx = [10, 60, 12, 20, 24];
-    final bd = pw.BorderSide(color: ink, width: 1);
-
-    pw.Widget cell(int i, pw.Widget child, {double? h}) {
-      return pw.Expanded(
-        flex: fx[i],
-        child: pw.Container(
-          height: h,
-          decoration: pw.BoxDecoration(
-            border: pw.Border(right: i == 4 ? pw.BorderSide.none : bd),
-          ),
-          child: child,
-        ),
-      );
-    }
-
-    pw.Widget centerText(String s, {bool b = false, double size = 12}) =>
-        pw.Center(child: pw.Text(s, style: st(size, b: b)));
-
-    pw.Widget topText(String s) => pw.Padding(
-          padding: const pw.EdgeInsets.only(top: 8),
-          child: pw.Align(
-            alignment: pw.Alignment.topCenter,
-            child: pw.Text(s, style: st(12.5, b: true)),
-          ),
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("PDF তৈরি করা যায়নি: $e")),
         );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
 
-    // ---- হেডার ----
-    final header = pw.Column(
-      crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+  // ---------------- পাতার চেহারা ----------------
+  String _g(String k) => _v[k] ?? '';
+
+  TextStyle _st(double size, {bool b = false, Color? c, bool i = false}) => TextStyle(
+        fontSize: size,
+        color: c ?? _ink,
+        fontWeight: b ? FontWeight.w700 : FontWeight.w400,
+        fontStyle: i ? FontStyle.italic : FontStyle.normal,
+        height: 1.25,
+        decoration: TextDecoration.none,
+      );
+
+  Widget _dashed(Widget child) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        pw.Row(
-          crossAxisAlignment: pw.CrossAxisAlignment.center,
+        Padding(padding: const EdgeInsets.only(bottom: 2), child: child),
+        _DashLine(_ink),
+      ],
+    );
+  }
+
+  Widget _line(String label, String value, {double labelW = 120, double top = 10}) {
+    return Padding(
+      padding: EdgeInsets.only(top: top),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          SizedBox(width: labelW, child: Text(label, style: _st(15, b: true))),
+          Expanded(child: _dashed(Text(value.isEmpty ? ' ' : value, style: _st(17)))),
+        ],
+      ),
+    );
+  }
+
+  Widget _header() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            pw.Expanded(
+            Expanded(
               flex: 3,
-              child: pw.Text(g('brand1'), style: st(26, b: true, c: accent)),
+              child: Text(_g('brand1'), style: _st(34, b: true, c: _accent)),
             ),
-            pw.Expanded(
+            Expanded(
               flex: 5,
-              child: pw.Center(child: pw.Text(g('shop'), style: st(30, b: true, c: accent))),
+              child: Center(
+                child: Text(_g('shop'), style: _st(40, b: true, c: _accent)),
+              ),
             ),
-            pw.Expanded(
+            Expanded(
               flex: 3,
-              child: pw.Column(
-                crossAxisAlignment: pw.CrossAxisAlignment.end,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  pw.Text(g('brand2'), style: st(17, b: true, c: accent)),
-                  pw.Text(g('brandTag'),
-                      textAlign: pw.TextAlign.right, style: st(7, b: true, c: accent)),
+                  Text(_g('brand2'), style: _st(24, b: true, c: _accent)),
+                  Text(_g('brandTag'),
+                      textAlign: TextAlign.right, style: _st(10, b: true, c: _accent)),
                 ],
               ),
             ),
           ],
         ),
-        pw.SizedBox(height: 6),
-        pw.Center(child: pw.Text(g('branch1'), style: st(10))),
-        pw.Center(child: pw.Text(g('branch2'), style: st(10))),
-        pw.Center(child: pw.Text(g('mobile'), style: st(10))),
-        pw.SizedBox(height: 2),
-        pw.Center(child: pw.Text(g('tagline'), style: st(9.5, b: true))),
-        pw.SizedBox(height: 6),
-        pw.Container(height: 1.2, color: ink),
+        const SizedBox(height: 8),
+        Center(child: Text(_g('branch1'), textAlign: TextAlign.center, style: _st(13.5))),
+        Center(child: Text(_g('branch2'), textAlign: TextAlign.center, style: _st(13.5))),
+        Center(child: Text(_g('mobile'), textAlign: TextAlign.center, style: _st(13.5))),
+        const SizedBox(height: 2),
+        Center(
+          child: Text(_g('tagline'), textAlign: TextAlign.center, style: _st(13, b: true)),
+        ),
+        const SizedBox(height: 8),
+        Container(height: 1.4, color: _ink),
       ],
     );
+  }
 
-    // ---- ক্রেতার তথ্য ----
-    final info = pw.Column(
-      crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+  Widget _topInfo() {
+    return Column(
       children: [
-        if (g('title').trim().isNotEmpty)
-          pw.Padding(
-            padding: const pw.EdgeInsets.only(top: 6),
-            child: pw.Center(child: pw.Text(g('title'), style: st(12, b: true))),
+        if (_g('title').trim().isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Center(child: Text(_g('title'), style: _st(16, b: true))),
           ),
-        pw.SizedBox(height: 8),
-        pw.Row(
+        const SizedBox(height: 10),
+        Row(
           children: [
-            pw.Text("${g('l_memo')}: ", style: st(12, b: true)),
-            pw.Container(
-              padding: const pw.EdgeInsets.symmetric(horizontal: 10, vertical: 2),
-              color: PdfColors.grey300,
-              child: pw.Text(g('memoNo'), style: st(14, b: true)),
+            Text("${_g('l_memo')}: ", style: _st(16, b: true)),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 3),
+              color: const Color(0xFFE9E9E9),
+              child: Text(_g('memoNo'), style: _st(18, b: true)),
             ),
-            pw.Spacer(),
-            pw.Text("${g('l_date')}: ", style: st(12, b: true)),
-            pw.SizedBox(
-              width: 110,
-              child: pw.Column(
-                crossAxisAlignment: pw.CrossAxisAlignment.stretch,
-                children: [
-                  pw.Center(child: pw.Text(g('date'), style: st(12.5))),
-                  dashed(),
-                ],
-              ),
+            const Spacer(),
+            Text("${_g('l_date')}: ", style: _st(16, b: true)),
+            SizedBox(
+              width: 150,
+              child: _dashed(Center(child: Text(_g('date'), style: _st(17)))),
             ),
           ],
         ),
-        field(g('l_name'), g('name')),
-        field(g('l_father'), g('father')),
-        field(g('l_address'), g('address')),
-        field(g('l_phone'), g('phone')),
-        field(g('l_ref'), g('ref'), labelW: 40),
+        _line(_g('l_name'), _g('name')),
+        _line(_g('l_father'), _g('father')),
+        _line(_g('l_address'), _g('address')),
+        _line(_g('l_phone'), _g('phone')),
+        _line(_g('l_ref'), _g('ref'), labelW: 60),
       ],
     );
+  }
 
-    // ---- টেবিল ----
-    pw.Widget vehicleLine(String l, String v) => pw.Padding(
-          padding: const pw.EdgeInsets.only(bottom: 3),
-          child: pw.Row(
-            crossAxisAlignment: pw.CrossAxisAlignment.end,
+  BorderSide get _bs => BorderSide(color: _ink, width: 1.4);
+
+  Widget _cell(int i, Widget child, {double? h}) {
+    return Expanded(
+      flex: _fx[i],
+      child: Container(
+        height: h,
+        decoration: BoxDecoration(
+          border: Border(right: i == 4 ? BorderSide.none : _bs),
+        ),
+        child: child,
+      ),
+    );
+  }
+
+  Widget _center(String s, {bool b = false, double size = 16}) =>
+      Center(child: Text(s, style: _st(size, b: b)));
+
+  Widget _top(String s) => Padding(
+        padding: const EdgeInsets.only(top: 12),
+        child: Align(
+          alignment: Alignment.topCenter,
+          child: Text(s, style: _st(17, b: true)),
+        ),
+      );
+
+  Widget _vehicleLine(String l, String v) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          SizedBox(width: 118, child: Text(l, style: _st(14.5, b: true))),
+          Expanded(child: _dashed(Text(v.isEmpty ? ' ' : v, style: _st(16)))),
+        ],
+      ),
+    );
+  }
+
+  Widget _totRow(String label, String value) {
+    return Container(
+      height: 36,
+      decoration: BoxDecoration(border: Border(top: _bs)),
+      child: Row(
+        children: [
+          Expanded(
+            flex: _fx[3],
+            child: Container(
+              alignment: Alignment.centerLeft,
+              padding: const EdgeInsets.only(left: 6),
+              decoration: BoxDecoration(border: Border(right: _bs)),
+              child: Text(label, style: _st(15, b: true)),
+            ),
+          ),
+          Expanded(
+            flex: _fx[4],
+            child: Center(child: Text(value, style: _st(16, b: true))),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _table() {
+    final note = _g('note').trim();
+    final extra = <Widget>[];
+    for (var i = 1; i <= 3; i++) {
+      final d = _g('x${i}d');
+      final q = _g('x${i}q');
+      final r = _g('x${i}r');
+      final t = _g('x${i}t');
+      if (d.isEmpty && q.isEmpty && r.isEmpty && t.isEmpty) continue;
+      extra.add(
+        Row(
+          children: [
+            _cell(0, const SizedBox(), h: 34),
+            _cell(
+              1,
+              Padding(
+                padding: const EdgeInsets.fromLTRB(8, 7, 8, 0),
+                child: Text(d, style: _st(15)),
+              ),
+              h: 34,
+            ),
+            _cell(2, Padding(padding: const EdgeInsets.only(top: 7), child: _center(q, size: 15)), h: 34),
+            _cell(3, Padding(padding: const EdgeInsets.only(top: 7), child: _center(r, size: 15)), h: 34),
+            _cell(4, Padding(padding: const EdgeInsets.only(top: 7), child: _center(t, size: 15)), h: 34),
+          ],
+        ),
+      );
+    }
+
+    return Container(
+      decoration: BoxDecoration(border: Border.all(color: _ink, width: 1.6)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Container(
+            height: 36,
+            decoration: BoxDecoration(border: Border(bottom: _bs)),
+            child: Row(
+              children: [
+                _cell(0, _center(_g('l_sl'), b: true, size: 15)),
+                _cell(1, _center(_g('l_desc'), b: true, size: 15)),
+                _cell(2, _center(_g('l_qty'), b: true, size: 15)),
+                _cell(3, _center(_g('l_rate'), b: true, size: 15)),
+                _cell(4, _center(_g('l_taka'), b: true, size: 15)),
+              ],
+            ),
+          ),
+          Row(
             children: [
-              pw.SizedBox(width: 82, child: pw.Text(l, style: st(11, b: true))),
-              pw.Expanded(
-                child: pw.Column(
-                  crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+              _cell(0, const SizedBox(), h: 112),
+              _cell(
+                1,
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(8, 10, 8, 0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _vehicleLine(_g('l_chassis'), _g('chassis')),
+                      _vehicleLine(_g('l_engine'), _g('engine')),
+                      _vehicleLine(_g('l_product'), _g('product')),
+                    ],
+                  ),
+                ),
+                h: 112,
+              ),
+              _cell(2, _top(_g('qty')), h: 112),
+              _cell(3, _top(_g('rate')), h: 112),
+              _cell(4, _top(_g('taka')), h: 112),
+            ],
+          ),
+          ...extra,
+          Expanded(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _cell(0, const SizedBox()),
+                _cell(
+                  1,
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+                    child: Align(
+                      alignment: Alignment.bottomLeft,
+                      child: note.isEmpty
+                          ? const SizedBox()
+                          : Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                _DashLine(_ink),
+                                Padding(
+                                  padding: const EdgeInsets.symmetric(vertical: 4),
+                                  child: Text(note, style: _st(14.5, b: true)),
+                                ),
+                                _DashLine(_ink),
+                              ],
+                            ),
+                    ),
+                  ),
+                ),
+                _cell(2, const SizedBox()),
+                _cell(3, const SizedBox()),
+                _cell(4, const SizedBox()),
+              ],
+            ),
+          ),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(flex: _fx[0] + _fx[1] + _fx[2], child: const SizedBox()),
+              Expanded(
+                flex: _fx[3] + _fx[4],
+                child: Column(
                   children: [
-                    pw.Text(v.isEmpty ? ' ' : v, style: st(12)),
-                    dashed(),
+                    _totRow(_g('l_total'), _g('total')),
+                    _totRow(_g('l_advance'), _g('advance')),
+                    _totRow(_g('l_due'), _g('due')),
                   ],
                 ),
               ),
             ],
           ),
-        );
-
-    final headRow = pw.Container(
-      height: 26,
-      decoration: pw.BoxDecoration(border: pw.Border(bottom: bd)),
-      child: pw.Row(
-        children: [
-          cell(0, centerText(g('l_sl'), b: true, size: 11.5)),
-          cell(1, centerText(g('l_desc'), b: true, size: 11.5)),
-          cell(2, centerText(g('l_qty'), b: true, size: 11.5)),
-          cell(3, centerText(g('l_rate'), b: true, size: 11.5)),
-          cell(4, centerText(g('l_taka'), b: true, size: 11.5)),
         ],
       ),
     );
+  }
 
-    final vehicleRow = pw.Row(
-      children: [
-        cell(0, pw.SizedBox(), h: 92),
-        cell(
-          1,
-          pw.Padding(
-            padding: const pw.EdgeInsets.fromLTRB(6, 8, 6, 0),
-            child: pw.Column(
-              crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+  Widget _signatures() {
+    return Padding(
+      padding: const EdgeInsets.only(top: 40, bottom: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 210,
+            child: Column(
               children: [
-                vehicleLine(g('l_chassis'), g('chassis')),
-                vehicleLine(g('l_engine'), g('engine')),
-                vehicleLine(g('l_product'), g('product')),
+                Container(height: 1.6, color: _ink),
+                const SizedBox(height: 4),
+                Text(_g('signBuyer'), style: _st(15, b: true)),
               ],
             ),
           ),
-          h: 92,
-        ),
-        cell(2, topText(g('qty')), h: 92),
-        cell(3, topText(g('rate')), h: 92),
-        cell(4, topText(g('taka')), h: 92),
-      ],
-    );
-
-    final extraRows = <pw.Widget>[];
-    for (var i = 1; i <= 3; i++) {
-      final d = g('x${i}d');
-      final q = g('x${i}q');
-      final r = g('x${i}r');
-      final t = g('x${i}t');
-      if (d.isEmpty && q.isEmpty && r.isEmpty && t.isEmpty) continue;
-      extraRows.add(
-        pw.Row(
-          children: [
-            cell(0, pw.SizedBox(), h: 24),
-            cell(
-              1,
-              pw.Padding(
-                padding: const pw.EdgeInsets.fromLTRB(6, 5, 6, 0),
-                child: pw.Text(d, style: st(12)),
-              ),
-              h: 24,
-            ),
-            cell(2, pw.Padding(padding: const pw.EdgeInsets.only(top: 5), child: centerText(q)), h: 24),
-            cell(3, pw.Padding(padding: const pw.EdgeInsets.only(top: 5), child: centerText(r)), h: 24),
-            cell(4, pw.Padding(padding: const pw.EdgeInsets.only(top: 5), child: centerText(t)), h: 24),
-          ],
-        ),
-      );
-    }
-
-    final note = g('note').trim();
-    final fillRow = pw.Expanded(
-      child: pw.Row(
-        crossAxisAlignment: pw.CrossAxisAlignment.stretch,
-        children: [
-          cell(0, pw.SizedBox()),
-          cell(
-            1,
-            pw.Padding(
-              padding: const pw.EdgeInsets.fromLTRB(6, 0, 6, 6),
-              child: pw.Align(
-                alignment: pw.Alignment.bottomLeft,
-                child: note.isEmpty
-                    ? pw.SizedBox()
-                    : pw.Column(
-                        mainAxisSize: pw.MainAxisSize.min,
-                        crossAxisAlignment: pw.CrossAxisAlignment.stretch,
-                        children: [
-                          dashed(),
-                          pw.Padding(
-                            padding: const pw.EdgeInsets.symmetric(vertical: 3),
-                            child: pw.Text(note, style: st(11.5, b: true)),
-                          ),
-                          dashed(),
-                        ],
-                      ),
-              ),
+          const Spacer(),
+          SizedBox(
+            width: 250,
+            child: Column(
+              children: [
+                Container(height: 1.6, color: _ink),
+                const SizedBox(height: 4),
+                Text(_g('signSeller'), style: _st(15, b: true)),
+                const SizedBox(height: 8),
+                Text(_g('director'), style: _st(14, c: _accent)),
+                Text(_g('directorTitle'),
+                    textAlign: TextAlign.center, style: _st(13, c: _accent)),
+              ],
             ),
           ),
-          cell(2, pw.SizedBox()),
-          cell(3, pw.SizedBox()),
-          cell(4, pw.SizedBox()),
         ],
       ),
     );
+  }
 
-    pw.Widget totRow(String label, String value) => pw.Container(
-          height: 26,
-          decoration: pw.BoxDecoration(border: pw.Border(top: bd)),
-          child: pw.Row(
+  Widget _page() {
+    return SizedBox(
+      width: _w,
+      height: _h,
+      child: ColoredBox(
+        color: Colors.white,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(40, 36, 40, 30),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              pw.Expanded(
-                flex: fx[3],
-                child: pw.Container(
-                  alignment: pw.Alignment.centerLeft,
-                  padding: const pw.EdgeInsets.only(left: 5),
-                  decoration: pw.BoxDecoration(border: pw.Border(right: bd)),
-                  child: pw.Text(label, style: st(11.5, b: true)),
-                ),
-              ),
-              pw.Expanded(
-                flex: fx[4],
-                child: pw.Center(child: pw.Text(value, style: st(12.5, b: true))),
-              ),
-            ],
-          ),
-        );
-
-    final totals = pw.Row(
-      crossAxisAlignment: pw.CrossAxisAlignment.start,
-      children: [
-        pw.Expanded(flex: fx[0] + fx[1] + fx[2], child: pw.SizedBox()),
-        pw.Expanded(
-          flex: fx[3] + fx[4],
-          child: pw.Column(
-            children: [
-              totRow(g('l_total'), g('total')),
-              totRow(g('l_advance'), g('advance')),
-              totRow(g('l_due'), g('due')),
+              _header(),
+              _topInfo(),
+              const SizedBox(height: 14),
+              Expanded(child: _table()),
+              _signatures(),
             ],
           ),
         ),
-      ],
-    );
-
-    final table = pw.Container(
-      decoration: pw.BoxDecoration(border: pw.Border.all(color: ink, width: 1.4)),
-      child: pw.Column(
-        crossAxisAlignment: pw.CrossAxisAlignment.stretch,
-        children: [
-          headRow,
-          vehicleRow,
-          ...extraRows,
-          fillRow,
-          totals,
-        ],
       ),
     );
-
-    // ---- স্বাক্ষর ----
-    final signs = pw.Padding(
-      padding: const pw.EdgeInsets.only(top: 30),
-      child: pw.Row(
-        mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-        crossAxisAlignment: pw.CrossAxisAlignment.start,
-        children: [
-          pw.Column(
-            children: [
-              pw.Container(width: 150, height: 1.2, color: ink),
-              pw.SizedBox(height: 3),
-              pw.Text(g('signBuyer'), style: st(11.5, b: true)),
-            ],
-          ),
-          pw.Column(
-            children: [
-              pw.Container(width: 180, height: 1.2, color: ink),
-              pw.SizedBox(height: 3),
-              pw.Text(g('signSeller'), style: st(11.5, b: true)),
-              pw.SizedBox(height: 6),
-              pw.Text(g('director'), style: st(10.5, c: accent)),
-              pw.Text(g('directorTitle'),
-                  textAlign: pw.TextAlign.center, style: st(9.5, c: accent)),
-            ],
-          ),
-        ],
-      ),
-    );
-
-    final doc = pw.Document();
-    doc.addPage(
-      pw.Page(
-        pageFormat: PdfPageFormat.a4,
-        margin: const pw.EdgeInsets.fromLTRB(30, 26, 30, 22),
-        theme: pw.ThemeData.withFont(base: reg, bold: bold),
-        build: (context) => pw.Column(
-          crossAxisAlignment: pw.CrossAxisAlignment.stretch,
-          children: [
-            header,
-            info,
-            pw.SizedBox(height: 10),
-            pw.Expanded(child: table),
-            signs,
-          ],
-        ),
-      ),
-    );
-    return doc.save();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: const Color(0xFFE9EDF3),
       appBar: AppBar(
         title: Text(widget.invoiceTitle),
         actions: [
           IconButton(
             tooltip: "এডিট (লেখা, টাকা, রঙ, সব কিছু)",
             icon: const Icon(Icons.edit),
-            onPressed: _loading || _error != null ? null : _edit,
+            onPressed: _loading ? null : _edit,
+          ),
+          IconButton(
+            tooltip: "PDF / প্রিন্ট",
+            icon: _busy
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                  )
+                : const Icon(Icons.picture_as_pdf),
+            onPressed: (_loading || _busy) ? null : _openPdf,
           ),
         ],
       ),
-      body: _error != null
-          ? Center(child: Padding(
-              padding: const EdgeInsets.all(24),
-              child: Text(_error!, style: const TextStyle(color: Colors.red)),
-            ))
-          : _loading
-              ? const Center(child: CircularProgressIndicator())
-              : PdfPreview(
-                  key: ValueKey(_gen),
-                  build: (format) => _generatePdf(format),
-                  canChangePageFormat: false,
-                  canChangeOrientation: false,
-                  canDebug: false,
-                  allowPrinting: true,
-                  allowSharing: true,
-                  pdfFileName: "invoice_${widget.invoiceNumber}.pdf",
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : SingleChildScrollView(
+              padding: const EdgeInsets.all(12),
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 820),
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: RepaintBoundary(key: _boundary, child: _page()),
+                  ),
                 ),
+              ),
+            ),
+    );
+  }
+}
+
+class _DashLine extends StatelessWidget {
+  final Color color;
+  const _DashLine(this.color);
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, box) {
+        final n = (box.maxWidth / 9).floor();
+        return Row(
+          children: [
+            for (var i = 0; i < n; i++)
+              Container(
+                width: 5,
+                height: 1.2,
+                color: color,
+                margin: const EdgeInsets.only(right: 4),
+              ),
+          ],
+        );
+      },
     );
   }
 }
