@@ -332,6 +332,8 @@ class _AddPartyScreenState extends State<AddPartyScreen> {
   final _addressController = TextEditingController();
   final _nidController = TextEditingController();
   final _refController = TextEditingController();
+  final _openingController = TextEditingController();
+  int _origOpening = 0;
 
   String _partyType = "customer";
   List<dynamic> _areas = [];
@@ -361,6 +363,7 @@ class _AddPartyScreenState extends State<AddPartyScreen> {
       _partyType = "${p["party_type"] ?? 'customer'}";
       _selectedAreaId = p["area_id"] as int?;
       _loadExtra();
+      _loadOpening();
     } else {
       _entryDate = DateTime.now();
     }
@@ -375,6 +378,7 @@ class _AddPartyScreenState extends State<AddPartyScreen> {
     _addressController.dispose();
     _nidController.dispose();
     _refController.dispose();
+    _openingController.dispose();
     super.dispose();
   }
 
@@ -436,6 +440,40 @@ class _AddPartyScreenState extends State<AddPartyScreen> {
     }
   }
 
+   Future<void> _loadOpening() async {
+    try {
+      final res = await http.get(
+        Uri.parse("$apiBaseUrl/parties/${widget.party!["id"]}/opening-balance"),
+        headers: _headers,
+      );
+      if (res.statusCode == 200 && mounted) {
+        final d = jsonDecode(utf8.decode(res.bodyBytes));
+        final amt = ((d["amount"] ?? 0) as num).toInt();
+        setState(() {
+          _origOpening = amt;
+          _openingController.text = amt > 0 ? "$amt" : "";
+        });
+      }
+    } catch (_) {}
+  }
+
+  /// সফল হলে null, না হলে এররের লেখা
+  Future<String?> _saveOpening(int partyId) async {
+    final txt = _normalizeNid(_openingController.text);
+    final amount = txt.isEmpty ? 0 : int.tryParse(txt);
+    if (amount == null) return "পূর্বের বকেয়ার অঙ্ক ঠিক নয়";
+    if (amount == _origOpening) return null;
+    final res = await http.put(
+      Uri.parse("$apiBaseUrl/parties/$partyId/opening-balance"),
+      headers: _headers,
+      body: jsonEncode({
+        "amount": amount,
+        "balance_date": _entryDate == null ? null : _fmtDate(_entryDate!),
+      }),
+    );
+    if (res.statusCode == 200) return null;
+    return _msgFrom(res, "পূর্বের বকেয়া সংরক্ষণ করা যায়নি");
+  }
   Future<void> _saveExtra(int partyId) async {
     await http.put(
       Uri.parse("$apiBaseUrl/parties/$partyId/extra"),
@@ -449,6 +487,7 @@ class _AddPartyScreenState extends State<AddPartyScreen> {
   }
 
   Future<void> _submitParty() async {
+
     if (!_formKey.currentState!.validate()) return;
 
     setState(() {
@@ -490,14 +529,27 @@ class _AddPartyScreenState extends State<AddPartyScreen> {
             id = (jsonDecode(utf8.decode(response.bodyBytes)) as Map)["id"] as int?;
           } catch (_) {}
         }
-        if (id != null) {
+      if (id != null) {
           try {
             await _saveExtra(id);
           } catch (_) {}
         }
+        String? openErr;
+        if (id != null && _partyType == "customer") {
+          try {
+            openErr = await _saveOpening(id);
+          } catch (_) {
+            openErr = "পূর্বের বকেয়া সংরক্ষণ করা যায়নি";
+          }
+        }
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(_isEdit ? "সফলভাবে আপডেট হয়েছে" : "সফলভাবে যোগ হয়েছে")),
+          SnackBar(
+            content: Text(openErr != null
+                ? "কাস্টমার সংরক্ষিত হয়েছে, কিন্তু $openErr"
+                : (_isEdit ? "সফলভাবে আপডেট হয়েছে" : "সফলভাবে যোগ হয়েছে")),
+            backgroundColor: openErr != null ? Colors.orange : null,
+          ),
         );
         Navigator.of(context).pop(true);
       } else if (response.statusCode == 202) {
@@ -634,6 +686,25 @@ class _AddPartyScreenState extends State<AddPartyScreen> {
                         border: OutlineInputBorder(),
                       ),
                     ),
+                      if (_partyType == "customer") ...[
+                      const SizedBox(height: 16),
+                      TextFormField(
+                        controller: _openingController,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(
+                          labelText: "পূর্বের বকেয়া (ঐচ্ছিক)",
+                          helperText: "হিসাব শুরুর আগে এই কাস্টমারের কাছে যত টাকা পাবেন",
+                          border: OutlineInputBorder(),
+                          prefixIcon: Icon(Icons.account_balance_wallet_outlined),
+                        ),
+                        validator: (value) {
+                          final t = _normalizeNid(value ?? '');
+                          if (t.isEmpty) return null;
+                          final n = int.tryParse(t);
+                          return (n == null || n < 0) ? "সঠিক অঙ্ক দিন" : null;
+                        },
+                      ),
+                    ],
                     const SizedBox(height: 16),
                     DropdownButtonFormField<int>(
                       initialValue: _selectedAreaId,

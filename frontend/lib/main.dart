@@ -40,6 +40,7 @@ import 'investor_screen.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'stock_transfer_screen.dart';
 import 'partner_screen.dart';
+import 'sale_edit_screen.dart';
 import 'db_init.dart';
 
 void main() {
@@ -1259,6 +1260,9 @@ class _AppShellState extends State<AppShell> {
     _MenuItem(Icons.store, "শোরুম ব্যবস্থাপনা",
         (t) => BranchScreen(token: t),
         roles: {'admin'}),
+     _MenuItem(Icons.edit_note, "বিক্রয় ইনভয়েস এডিট",
+        (t) => SaleEditListScreen(token: t),
+        roles: {'admin'}),
   ];
 
   @override
@@ -1288,7 +1292,8 @@ class _AppShellState extends State<AppShell> {
       ];
 
   /// "গাড়ী খুঁজুন" পেজ খোলে (মেনুর শেষ আইটেম)
-  void _openSearch() => _go(_items.length - 1);
+    void _openSearch() =>
+      _go(_items.indexWhere((i) => i.title == "গাড়ী খুঁজুন"));
 
   Future<void> _go(int index) async {
     if (!_canSee(_items[index])) return;
