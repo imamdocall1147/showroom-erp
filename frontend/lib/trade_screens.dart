@@ -4,6 +4,8 @@ import 'invoice_screen.dart';
 import 'sync_service.dart';
 import 'app_theme.dart';
 import 'qr_scan.dart';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
 
 // ---------------------------------------------------------------
 // বাইক ক্রয়: সাপ্লায়ারকে আগে দেওয়া অগ্রিম থেকে কাটা যায়, বাকিটা নগদ বা বাকি
@@ -41,6 +43,11 @@ class _PurchaseScreenState extends State<PurchaseScreen> {
 
   bool _isLoadingLists = true;
   bool _usingCachedLists = false;
+  final _challanUrlController = TextEditingController();
+  List<Map<String, dynamic>> _batch = [];
+  String? _challanNo;
+  String? _challanModel;
+  bool _isFetching = false;
   bool _isSubmitting = false;
   String? _errorMessage;
 
@@ -82,6 +89,7 @@ class _PurchaseScreenState extends State<PurchaseScreen> {
     _yearController.dispose();
     _priceController.dispose();
     _advanceController.dispose();
+    _challanUrlController.dispose();
     super.dispose();
   }
 
@@ -143,6 +151,139 @@ class _PurchaseScreenState extends State<PurchaseScreen> {
           _isLoadingLists = false;
         });
       }
+    }
+  }
+
+  Future<void> _fetchChallan() async {
+    final url = _challanUrlController.text.trim();
+    if (url.isEmpty) {
+      setState(() => _errorMessage = "চালানের লিংক দিন");
+      return;
+    }
+    setState(() {
+      _isFetching = true;
+      _errorMessage = null;
+    });
+    try {
+      final res = await http
+          .post(
+            Uri.parse("$apiBaseUrl/challan/preview"),
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": "Bearer ${widget.token}",
+            },
+            body: jsonEncode({"url": url}),
+          )
+          .timeout(const Duration(seconds: 40));
+      final data = jsonDecode(utf8.decode(res.bodyBytes));
+      if (!mounted) return;
+      if (res.statusCode != 200) {
+        setState(() {
+          _errorMessage =
+              (data is Map ? data["detail"] : null)?.toString() ?? "চালান আনা যায়নি";
+        });
+        return;
+      }
+      final units = (data["units"] as List)
+          .map<Map<String, dynamic>>((u) => {
+                "engine_no": "${u["engine_no"]}",
+                "chassis_no": "${u["chassis_no"]}",
+                "status": "pending",
+                "error": "",
+              })
+          .toList();
+      final warnings = (data["warnings"] as List?)?.join("\n") ?? "";
+      setState(() {
+        _batch = units;
+        _challanNo = data["challan_no"]?.toString();
+        _challanModel = data["model_text"]?.toString();
+        final p = data["unit_price_with_tax"];
+        if (p is num) _priceController.text = "${p.round()}";
+        final d = DateTime.tryParse("${data["date"]}");
+        if (d != null && !d.isAfter(DateTime.now())) _entryDate = d;
+        _errorMessage = warnings.isEmpty ? null : warnings;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _errorMessage = "চালান আনা যায়নি (ইন্টারনেট বা সার্ভার সমস্যা)");
+    } finally {
+      if (mounted) setState(() => _isFetching = false);
+    }
+  }
+
+  Future<void> _submitBatch() async {
+    if (!_formKey.currentState!.validate()) return;
+    if (_selectedProductId == null || _selectedWarehouseId == null) {
+      setState(() => _errorMessage = "প্রোডাক্ট ও গোডাউন বেছে নিন");
+      return;
+    }
+    if (_paymentMode == "due" && _selectedSupplierId == null) {
+      setState(() => _errorMessage = "বাকিতে ক্রয়ের জন্য সাপ্লায়ার বেছে নিন");
+      return;
+    }
+    final price = _price;
+    if (price <= 0) {
+      setState(() => _errorMessage = "ক্রয় মূল্য দিন");
+      return;
+    }
+
+    setState(() {
+      _isSubmitting = true;
+      _errorMessage = null;
+    });
+
+    bool anyOffline = false;
+
+    for (final u in _batch) {
+      if (u["status"] == "ok" || u["status"] == "offline") continue;
+
+      final result = await SyncService().apiCall(
+        method: "POST",
+        endpoint: "/units/purchase",
+        body: {
+          "product_id": _selectedProductId,
+          "warehouse_id": _selectedWarehouseId,
+          "chassis_no": u["chassis_no"],
+          "engine_no": u["engine_no"],
+          "color": _colorController.text.trim().isEmpty ? null : _colorController.text.trim(),
+          "year": _yearController.text.trim().isEmpty ? null : _yearController.text.trim(),
+          "purchase_price": price,
+          "payment_mode": _paymentMode,
+          "supplier_id": _selectedSupplierId,
+          "advance_used": 0,
+          "order_id": _selectedOrderId,
+          "purchase_date": _fmtYmd(_entryDate),
+          "gate_pass_no": _gatePassController.text.trim().isEmpty
+              ? null
+              : _gatePassController.text.trim(),
+        },
+        token: widget.token,
+        description: "বাইক ক্রয়: ${u["chassis_no"]}",
+      );
+      if (!mounted) return;
+
+      if (result["offline"] == true) {
+        setState(() => u["status"] = "offline");
+        anyOffline = true;
+      } else if (result["error"] == true) {
+        setState(() {
+          u["status"] = "failed";
+          u["error"] = "${result["message"]}";
+        });
+      } else {
+        setState(() => u["status"] = "ok");
+      }
+    }
+
+    final failed = _batch.where((u) => u["status"] == "failed").length;
+    setState(() {
+      _isSubmitting = false;
+      if (failed > 0) {
+        _errorMessage = "$failedটি সেভ হয়নি (লাল সারি দেখুন)। আবার চাপলে শুধু ওগুলো চেষ্টা হবে।";
+      }
+    });
+    if (failed == 0) {
+      Navigator.of(context).pop(anyOffline ? "offline" : true);
     }
   }
 
@@ -369,6 +510,106 @@ class _PurchaseScreenState extends State<PurchaseScreen> {
                     const SizedBox(height: 16),
                     buildEntryDateField(context, _entryDate, (d) => setState(() => _entryDate = d), "ক্রয়ের তারিখ"),
                     const SizedBox(height: 12),
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.indigo.shade50,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: Colors.indigo.shade100),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          TextField(
+                            controller: _challanUrlController,
+                            decoration: InputDecoration(
+                              labelText: "চালানের লিংক (QR স্ক্যান করে লিংক পেস্ট করুন)",
+                              border: const OutlineInputBorder(),
+                              suffixIcon: IconButton(
+                                tooltip: "QR স্ক্যান",
+                                icon: const Icon(Icons.qr_code_scanner),
+                                onPressed: () async {
+                                  final code = await scanChassisQr(context);
+                                  if (code != null && code.isNotEmpty) {
+                                    setState(() => _challanUrlController.text = code);
+                                  }
+                                },
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          ElevatedButton.icon(
+                            onPressed: _isFetching ? null : _fetchChallan,
+                            icon: _isFetching
+                                ? const SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(strokeWidth: 2),
+                                  )
+                                : const Icon(Icons.download),
+                            label: const Text("চালান থেকে আনুন"),
+                          ),
+                          if (_batch.isNotEmpty) ...[
+                            const Divider(),
+                            Text(
+                              "চালান ${_challanNo ?? ''} — ${_batch.length}টি গাড়ি"
+                              "${_challanModel != null ? '\nচালানে মডেল: $_challanModel (ওপরে সঠিক প্রোডাক্ট বেছে নিন)' : ''}",
+                              style: const TextStyle(fontWeight: FontWeight.w600),
+                            ),
+                            ..._batch.map((u) {
+                              final s = u["status"];
+                              return ListTile(
+                                dense: true,
+                                contentPadding: EdgeInsets.zero,
+                                leading: Icon(
+                                  s == "ok"
+                                      ? Icons.check_circle
+                                      : s == "failed"
+                                          ? Icons.error
+                                          : s == "offline"
+                                              ? Icons.cloud_off
+                                              : Icons.circle_outlined,
+                                  color: s == "ok"
+                                      ? Colors.green
+                                      : s == "failed"
+                                          ? Colors.red
+                                          : s == "offline"
+                                              ? Colors.orange
+                                              : Colors.grey,
+                                ),
+                                title: Text("চেসিস: ${u["chassis_no"]}"),
+                                subtitle: Text(
+                                  "ইঞ্জিন: ${u["engine_no"]}"
+                                  "${(u["error"] as String).isNotEmpty ? '\n${u["error"]}' : ''}",
+                                  style: TextStyle(
+                                    color: s == "failed" ? Colors.red : null,
+                                  ),
+                                ),
+                                trailing: (s == "pending" || s == "failed")
+                                    ? IconButton(
+                                        tooltip: "এই গাড়ি বাদ দিন",
+                                        icon: const Icon(Icons.close),
+                                        onPressed: () => setState(() => _batch.remove(u)),
+                                      )
+                                    : null,
+                              );
+                            }),
+                            TextButton(
+                              onPressed: _isSubmitting
+                                  ? null
+                                  : () => setState(() {
+                                        _batch = [];
+                                        _challanNo = null;
+                                        _challanModel = null;
+                                      }),
+                              child: const Text("বাতিল, এক এক করে দেব"),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    if (_batch.isEmpty) ...[
                     TextFormField(
                       controller: _chassisController,
                        decoration: InputDecoration(
@@ -401,6 +642,7 @@ class _PurchaseScreenState extends State<PurchaseScreen> {
                           (value == null || value.trim().isEmpty) ? "ইঞ্জিন নম্বর দিন" : null,
                     ),
                     const SizedBox(height: 16),
+                    ],
                     TextFormField(
                       controller: _gatePassController,
                       decoration: const InputDecoration(
@@ -602,14 +844,14 @@ class _PurchaseScreenState extends State<PurchaseScreen> {
                     SizedBox(
                       height: 48,
                       child: ElevatedButton(
-                        onPressed: _isSubmitting ? null : _submitPurchase,
+                        onPressed: _isSubmitting ? null : (_batch.isEmpty ? _submitPurchase : _submitBatch),
                         child: _isSubmitting
                             ? const SizedBox(
                                 width: 20,
                                 height: 20,
                                 child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                               )
-                            : const Text("স্টকে যোগ করুন", style: TextStyle(fontSize: 16)),
+                            : Text(_batch.isEmpty ? "স্টকে যোগ করুন" : "${_batch.length}টি গাড়ি স্টকে যোগ করুন", style: const TextStyle(fontSize: 16)),
                       ),
                     ),
                   ],
@@ -790,10 +1032,13 @@ class _SellScreenState extends State<SellScreen> {
               paymentMode: _paymentMode,
               totalAmount: grandTotal,
               paidAmount: _paymentMode == "due" ? _numOf(_paidController) : null,
+              chassisNo: widget.unit['chassis_no']?.toString(),
+              engineNo: widget.unit['engine_no']?.toString(),
+              productName: "${widget.unit['brand'] ?? ''} ${widget.unit['model'] ?? ''}".trim(),
               items: [
                 InvoiceItem(
                   description:
-                      "${widget.unit['brand'] ?? ''} ${widget.unit['model'] ?? ''} (চেসিস: ${widget.unit['chassis_no']})",
+                      "${widget.unit['brand'] ?? ''} ${widget.unit['model'] ?? ''}".trim(),
                   qty: 1,
                   unit: "pcs",
                   unitPrice: soldPrice,
