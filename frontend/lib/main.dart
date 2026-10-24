@@ -11,7 +11,6 @@ import 'expense_screen.dart';
 import 'accounts_screen.dart';
 import 'spare_parts_screen.dart';
 import 'payable_screen.dart';
-import 'invoice_screen.dart';
 import 'user_management_screen.dart';
 import 'brta_screen.dart';
 import 'dashboard_screen.dart';
@@ -28,7 +27,6 @@ import 'decoration_screen.dart';
 import 'trade_screens.dart';
 import 'supplier_advance_screen.dart';
 import 'supplier_order_screen.dart';
-import 'supplier_quick_add.dart';
 import 'welcome_screen.dart';
 import 'unit_search_screen.dart';
 import 'supplier_delivery_screen.dart';
@@ -40,7 +38,6 @@ import 'investor_screen.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'stock_transfer_screen.dart';
 import 'partner_screen.dart';
-import 'sale_edit_screen.dart';
 import 'db_init.dart';
 
 void main() {
@@ -1260,9 +1257,7 @@ class _AppShellState extends State<AppShell> {
     _MenuItem(Icons.store, "শোরুম ব্যবস্থাপনা",
         (t) => BranchScreen(token: t),
         roles: {'admin'}),
-     _MenuItem(Icons.edit_note, "বিক্রয় ইনভয়েস এডিট",
-        (t) => SaleEditListScreen(token: t),
-        roles: {'admin'}),
+     
   ];
 
   @override
@@ -1917,7 +1912,7 @@ class _FooterBarState extends State<_FooterBar> {
             const Text("   |   ", style: s),
             Text("Backend: $apiBaseUrl", style: s),
             const Text("   |   ", style: s),
-            const Text("Version: 1.0.0", style: s),
+            const Text("Version: 1.1.0-memo", style: s),
           ],
           const Spacer(),
           const Flexible(

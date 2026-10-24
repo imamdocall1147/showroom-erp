@@ -245,10 +245,15 @@ class _PurchaseScreenState extends State<PurchaseScreen> {
               totalAmount: price,
               partyLabel: "সাপ্লায়ার",
               partySignatureLabel: "বিক্রেতার স্বাক্ষর",
+              chassisNo: _chassisController.text.trim(),
+              engineNo: _engineController.text.trim(),
+              productName: product != null ? product['model_name'] : '',
+            
               items: [
                 InvoiceItem(
                   description:
                       "${product != null ? product['model_name'] : ''} (চেসিস: ${_chassisController.text.trim()}, ইঞ্জিন: ${_engineController.text.trim()})",
+                      
                   qty: 1,
                   unit: "pcs",
                   unitPrice: price,

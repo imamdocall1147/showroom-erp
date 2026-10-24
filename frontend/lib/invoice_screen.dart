@@ -266,7 +266,7 @@ class _InvoiceScreenState extends State<InvoiceScreen> {
       'qty': first == null ? (widget.chassisNo != null ? '1' : '') : '${first.qty}',
       'rate': (first == null || hide) ? '' : '${first.unitPrice}',
       'taka': (first == null || hide) ? '' : '${first.total}',
-      'note': widget.note ?? '',
+      'note': widget.note ?? '',    
       'total': hide ? '' : '${widget.totalAmount}',
       'advance': hide ? '' : '$_paid',
       'due': hide ? '' : '$due',
