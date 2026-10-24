@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'main.dart';
+import 'invoice_screen.dart';
 
 /// স্টক ট্রান্সফার: এক শোরুম/গোডাউন থেকে অন্য শোরুমে গাড়ী পাঠানো।
 /// পাঠালে গাড়ীটা সাথে সাথে গন্তব্য শোরুমের স্টকে যায়, সেখান থেকে সাধারণ বিক্রয় চলে।
+/// প্রতিটা গাড়ীর জন্য আলাদা মেমো (এডিট ও প্রিন্ট করা যায়)।
 class StockTransferScreen extends StatefulWidget {
   final String token;
 
@@ -109,6 +111,66 @@ class _StockTransferScreenState extends State<StockTransferScreen> {
     );
   }
 
+  // ---------------- মেমো ----------------
+  Future<void> _openMemo(String batch, Map<String, dynamic> u, String target,
+      {DateTime? date}) {
+    return Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => InvoiceScreen(
+          invoiceTitle: "স্টক ট্রান্সফার মেমো",
+          invoiceNumber: batch,
+          storageKey: "transfer_${batch}_${u['chassis_no']}",
+          date: date ?? DateTime.now(),
+          partyName: target,
+          items: const [],
+          paymentMode: "cash",
+          totalAmount: 0,
+          hideAmounts: true,
+          chassisNo: "${u['chassis_no'] ?? ''}",
+          engineNo: "${u['engine_no'] ?? ''}",
+          productName: "${u['brand'] ?? ''} ${u['model'] ?? ''}".trim(),
+          note: "উক্ত গাড়িটি শোরুম থেকে শোরুমে পাঠানো হলো",
+        ),
+      ),
+    );
+  }
+
+  Future<void> _afterTransfer(
+      String batch, List<Map<String, dynamic>> units, String target) async {
+    if (!mounted || units.isEmpty) return;
+    if (units.length == 1) {
+      await _openMemo(batch, units.first, target);
+      return;
+    }
+    await showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text("মেমো ছাপুন (${units.length} টি গাড়ী)"),
+        content: SizedBox(
+          width: 420,
+          child: ListView(
+            shrinkWrap: true,
+            children: units
+                .map((u) => ListTile(
+                      dense: true,
+                      leading: const Icon(Icons.receipt_long),
+                      title: Text("${u['brand'] ?? ''} ${u['model'] ?? ''}".trim()),
+                      subtitle: Text("চেসিস: ${u['chassis_no']}"),
+                      onTap: () => _openMemo(batch, u, target),
+                    ))
+                .toList(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text("বন্ধ করুন"),
+          ),
+        ],
+      ),
+    );
+  }
+
   List<Map<String, dynamic>> get _shown {
     final q = _search.trim().toLowerCase();
     if (q.isEmpty) return _units;
@@ -149,6 +211,13 @@ class _StockTransferScreenState extends State<StockTransferScreen> {
     );
     if (ok != true) return;
 
+    // পাঠানোর পর তালিকা বদলে যায়, তাই মেমোর জন্য আগেই গাড়ীগুলো রেখে দেওয়া
+    final sentUnits = _units
+        .where((u) => _selected.contains(u["unit_id"]))
+        .map((u) => Map<String, dynamic>.from(u))
+        .toList();
+    final targetText = _targetLabel(target);
+
     setState(() {
       _sending = true;
     });
@@ -172,6 +241,7 @@ class _StockTransferScreenState extends State<StockTransferScreen> {
           _noteC.clear();
         });
         await _load();
+        await _afterTransfer("${d["batch_no"]}", sentUnits, targetText);
       } else {
         _snack(_detail(res, "ট্রান্সফার করা যায়নি"), color: Colors.red);
       }
@@ -386,6 +456,16 @@ class _StockTransferScreenState extends State<StockTransferScreen> {
                   "${h['to_branch'] ?? '-'} (${h['to_warehouse'] ?? '-'})",
                 ),
                 isThreeLine: true,
+                trailing: IconButton(
+                  tooltip: "মেমো দেখুন / ছাপুন",
+                  icon: const Icon(Icons.receipt_long),
+                  onPressed: () => _openMemo(
+                    "${h['batch_no']}",
+                    h,
+                    "${h['to_branch'] ?? '-'} (${h['to_warehouse'] ?? '-'})",
+                    date: DateTime.tryParse("${h['date']}"),
+                  ),
+                ),
               ),
             ),
           ],
