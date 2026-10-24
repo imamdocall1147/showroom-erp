@@ -14,8 +14,7 @@ import os
 import bcrypt
 from dotenv import load_dotenv
 from backend.master_data import build_master_router
-
-
+from backend import challan_import
 
 from backend.database import engine, get_db
 from backend.models import (
@@ -164,6 +163,18 @@ app.include_router(build_router(get_current_user))
 app.include_router(build_advance_router(get_current_user))
 
 app.include_router(build_master_router(get_current_user))
+class ChallanUrlIn(BaseModel):
+    url: str
+
+@app.post("/challan/preview")
+def challan_preview(body: ChallanUrlIn, current_user=Depends(get_current_user)):
+    try:
+        return challan_import.import_from_url(body.url)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception:
+        raise HTTPException(status_code=502, detail="চালান নামানো বা পড়া যায়নি")
+
 
 @app.head("/")
 def head_root():
