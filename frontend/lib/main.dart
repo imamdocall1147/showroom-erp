@@ -39,6 +39,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'stock_transfer_screen.dart';
 import 'partner_screen.dart';
 import 'db_init.dart';
+import 'commission_screen.dart';
 
 void main() {
   http.runWithClient(
@@ -1211,6 +1212,7 @@ class _AppShellState extends State<AppShell> {
         (t) => HomeScreen(token: t, role: widget.role)),
     _MenuItem(Icons.dashboard, "ড্যাশবোর্ড", (t) => DashboardScreen(token: t)),
     _MenuItem(Icons.people, "কাস্টমার/সাপ্লায়ার", (t) => PartyListScreen(token: t)),
+    _MenuItem(Icons.percent, "কোম্পানি কমিশন", (t) => CommissionScreen(token: t)),
     _MenuItem(Icons.receipt_long, "বাকি আদায়", (t) => ReceivablesScreen(token: t)),
     _MenuItem(Icons.money_off, "দোকান খরচ", (t) => ExpenseScreen(token: t)),
     _MenuItem(Icons.account_balance_wallet, "একাউন্ট ব্যালান্স",
