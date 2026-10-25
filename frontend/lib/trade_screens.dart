@@ -1029,6 +1029,7 @@ class _SellScreenState extends State<SellScreen> {
               date: _entryDate,
               partyName: customer != null ? customer["name"] : "",
               partyPhone: customer != null ? customer["phone"] : null,
+              address: customer != null ? customer["address"] : null,
               paymentMode: _paymentMode,
               totalAmount: grandTotal,
               paidAmount: _paymentMode == "due" ? _numOf(_paidController) : null,

@@ -107,6 +107,7 @@ def order_dict(o: AdvanceOrder, sums: dict, lk: Lookups) -> dict:
         "customer_id": o.customer_id,
         "customer_name": cust.name if cust else None,
         "customer_phone": cust.phone if cust else None,
+        "customer_address": cust.address if cust else None,
         "product_id": o.product_id,
         "model": prod.model_name if prod else None,
         "brand": brand.name if brand else None,

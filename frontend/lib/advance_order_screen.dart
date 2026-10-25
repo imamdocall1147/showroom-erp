@@ -1308,6 +1308,7 @@ class _AdvanceDeliverScreenState extends State<AdvanceDeliverScreen> {
               date: DateTime.now(),
               partyName: "${widget.order["customer_name"] ?? ''}",
               partyPhone: widget.order["customer_phone"],
+              address: widget.order["customer_address"],
               paymentMode: due > 0 ? "due" : "cash",
               totalAmount: price,
               items: [
