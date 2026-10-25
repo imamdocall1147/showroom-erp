@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, date
 from jose import jwt, ExpiredSignatureError
 from backend.sms_service import send_sms
 from backend.advance_orders import build_advance_router
+from backend.commission import build_commission_router
 from backend.report_data import build_router
 import os
 import bcrypt
@@ -161,6 +162,7 @@ def account_ids_in_scope(db: Session, name: str, bid):
 app.include_router(build_router(get_current_user))
 
 app.include_router(build_advance_router(get_current_user))
+app.include_router(build_commission_router(get_current_user, User))
 
 app.include_router(build_master_router(get_current_user))
 class ChallanUrlIn(BaseModel):
