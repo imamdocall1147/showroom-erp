@@ -504,7 +504,6 @@ class UnitPurchaseCreate(BaseModel):
     engine_no: str
     color: str | None = None
     year: str | None = None
-    purchase_price: int
     purchase_date: str | None = None
     supplier_id: int | None = None
     payment_mode: str = "cash"
