@@ -4,8 +4,8 @@ from pydantic import BaseModel
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey
 from sqlalchemy.orm import Session
 
-from backend.database import Base, get_db
-from backend.models import Unit, Voucher, VoucherEntry, Account
+from backend.database import get_db
+from backend.models import Base, Unit, Voucher, VoucherEntry, Account
 
 router = APIRouter()
 
