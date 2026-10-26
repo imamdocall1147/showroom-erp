@@ -902,6 +902,83 @@ class _SellScreenState extends State<SellScreen> {
 
   int get _dueAmount => _totalPrice - _paidNow;
 
+    Future<void> _pickCustomer() async {
+    final searchCtrl = TextEditingController();
+    final picked = await showDialog<int>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setD) {
+          final q = searchCtrl.text.trim().toLowerCase();
+          final list = q.isEmpty
+              ? _customers
+              : _customers.where((c) {
+                  final t = "${c["name"] ?? ''} ${c["phone"] ?? ''} ${c["address"] ?? ''}"
+                      .toLowerCase();
+                  return t.contains(q);
+                }).toList();
+          return AlertDialog(
+            title: const Text("কাস্টমার বাছুন"),
+            content: SizedBox(
+              width: 420,
+              height: 420,
+              child: Column(
+                children: [
+                  TextField(
+                    controller: searchCtrl,
+                    autofocus: true,
+                    decoration: const InputDecoration(
+                      hintText: "নাম, ফোন বা ঠিকানা দিয়ে খুঁজুন",
+                      prefixIcon: Icon(Icons.search),
+                      border: OutlineInputBorder(),
+                      isDense: true,
+                    ),
+                    onChanged: (_) => setD(() {}),
+                  ),
+                  const SizedBox(height: 8),
+                  Expanded(
+                    child: list.isEmpty
+                        ? const Center(child: Text("কোনো কাস্টমার পাওয়া যায়নি"))
+                        : ListView.builder(
+                            itemCount: list.length,
+                            itemBuilder: (_, i) {
+                              final c = list[i];
+                              return ListTile(
+                                title: Text("${c["name"]}"),
+                                subtitle: Text(
+                                    "${c["phone"] ?? '-'} | ${c["address"] ?? '-'}"),
+                                onTap: () => Navigator.pop(ctx, c["id"] as int),
+                              );
+                            },
+                          ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text("বাতিল"),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+    searchCtrl.dispose();
+    if (picked != null) setState(() => _selectedCustomerId = picked);
+  }
+
+  String get _selectedCustomerLabel {
+    if (_selectedCustomerId == null) return "";
+    for (final c in _customers) {
+      if (c["id"] == _selectedCustomerId) {
+        final phone = (c["phone"] ?? "").toString();
+        return phone.isEmpty ? "${c["name"]}" : "${c["name"]}  ($phone)";
+      }
+    }
+    return "";
+  }
+
   @override
   void initState() {
     super.initState();
@@ -1156,24 +1233,29 @@ class _SellScreenState extends State<SellScreen> {
                       ),
                     ),
                     const SizedBox(height: 20),
-                    DropdownButtonFormField<int>(
-                      initialValue: _selectedCustomerId,
-                      decoration: const InputDecoration(
-                        labelText: "কাস্টমার",
-                        border: OutlineInputBorder(),
+                    FormField<int>(
+                      validator: (_) =>
+                          _selectedCustomerId == null ? "কাস্টমার বেছে নিন" : null,
+                      builder: (state) => InkWell(
+                        onTap: () async {
+                          await _pickCustomer();
+                          state.didChange(_selectedCustomerId);
+                        },
+                        child: InputDecorator(
+                          decoration: InputDecoration(
+                            labelText: "কাস্টমার",
+                            border: const OutlineInputBorder(),
+                            errorText: state.errorText,
+                            suffixIcon: const Icon(Icons.search),
+                          ),
+                          child: Text(
+                            _selectedCustomerId == null
+                                ? "চাপুন ও খুঁজে বাছুন"
+                                : _selectedCustomerLabel,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
                       ),
-                      items: _customers.map<DropdownMenuItem<int>>((c) {
-                        return DropdownMenuItem<int>(
-                          value: c["id"],
-                          child: Text("${c["name"]}"),
-                        );
-                      }).toList(),
-                      onChanged: (value) {
-                        setState(() {
-                          _selectedCustomerId = value;
-                        });
-                      },
-                      validator: (value) => value == null ? "কাস্টমার বেছে নিন" : null,
                     ),
                     const SizedBox(height: 16),
                     buildEntryDateField(context, _entryDate, (d) => setState(() => _entryDate = d), "বিক্রয়ের তারিখ"),
