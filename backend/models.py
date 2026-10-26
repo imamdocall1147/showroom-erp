@@ -292,3 +292,7 @@ Party.reference = Column(String(100))        # রেফারেন্স
 Party.entry_date = Column(Date)              # তারিখ
 Unit.sold_by_partner_id = Column(Integer, nullable=True)   # কোন পার্টনার বিক্রি করেছেন
 Unit.sale_ref = Column(String(100))          # বিক্রয়ের রেফারেন্স
+AdvanceOrder.quantity = Column(Integer, default=1)          # কত ইউনিটের অর্ডার
+AdvanceOrder.unit_price = Column(Integer, nullable=True)    # প্রতি ইউনিটের চুক্তির দাম
+AdvanceOrder.delivered_qty = Column(Integer, default=0)     # কত ইউনিট ডেলিভারি হয়েছে
+AdvanceOrder.delivered_value = Column(Integer, default=0)   # ডেলিভারি হওয়া ইউনিটের চুক্তি মূল্য
