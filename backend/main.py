@@ -43,6 +43,10 @@ def _ensure_new_columns():
         ("parties", "entry_date", "DATE"),
         ("units", "sold_by_partner_id", "INTEGER"),
         ("units", "sale_ref", "VARCHAR(100)"),
+        ("advance_orders", "quantity", "INTEGER DEFAULT 1"),
+        ("advance_orders", "unit_price", "INTEGER"),
+        ("advance_orders", "delivered_qty", "INTEGER DEFAULT 0"),
+        ("advance_orders", "delivered_value", "INTEGER DEFAULT 0"),
     ]
     for table, col, typ in wanted:
         try:

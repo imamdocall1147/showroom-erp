@@ -1,6 +1,10 @@
 """
 অগ্রিম অর্ডার ও অগ্রিম পেমেন্ট।
 
+একটা অর্ডারে একাধিক ইউনিট থাকতে পারে (quantity)। ডেলিভারি একটা একটা করে হয়।
+agreed_price = সব ইউনিট মিলিয়ে মোট চুক্তির মূল্য, unit_price = প্রতি ইউনিটের দাম।
+শেষ ইউনিটে বাকি পুরো চুক্তি মূল্য ধরা হয়, যাতে ভাগের হিসাবে এক টাকাও এদিক-ওদিক না হয়।
+
 শোরুম: প্রতিটি অর্ডার একটি শোরুমের (AdvanceOrder.branch_id)। অগ্রিম, ডেলিভারি ও বাতিলের সব
 ভাউচার ওই শোরুমের নিজস্ব একাউন্টে যায়। ডেলিভারির বাইক অবশ্যই একই শোরুমের স্টকের হতে হবে।
 
@@ -87,6 +91,27 @@ def held_of(s: dict) -> int:
             - s.get("forfeit", 0) - s.get("applied", 0))
 
 
+def qty_of(o) -> int:
+    return o.quantity or 1
+
+
+def delivered_qty_of(o) -> int:
+    return o.delivered_qty or 0
+
+
+def delivered_value_of(o) -> int:
+    return o.delivered_value or 0
+
+
+def contract_unit_price(o) -> int:
+    """পরের ইউনিটের চুক্তির দাম। শেষ ইউনিটে বাকি পুরো চুক্তি মূল্য।"""
+    left = qty_of(o) - delivered_qty_of(o)
+    remaining_value = o.agreed_price - delivered_value_of(o)
+    if left <= 1:
+        return max(remaining_value, 0)
+    return o.unit_price or (remaining_value // left)
+
+
 class Lookups:
     def __init__(self, db: Session):
         self.parties = {x.id: x for x in db.query(Party).all()}
@@ -101,6 +126,9 @@ def order_dict(o: AdvanceOrder, sums: dict, lk: Lookups) -> dict:
     prod = lk.products.get(o.product_id)
     brand = lk.brands.get(prod.brand_id) if prod else None
     today = (datetime.utcnow() + LOCAL_OFFSET).date()
+    qty = qty_of(o)
+    dq = delivered_qty_of(o)
+    is_open = o.status == "open"
     return {
         "id": o.id,
         "branch_id": o.branch_id,
@@ -113,15 +141,20 @@ def order_dict(o: AdvanceOrder, sums: dict, lk: Lookups) -> dict:
         "brand": brand.name if brand else None,
         "color": o.color,
         "agreed_price": o.agreed_price,
+        "quantity": qty,
+        "unit_price": o.unit_price or (o.agreed_price // qty),
+        "delivered_qty": dq,
+        "remaining_qty": max(qty - dq, 0),
+        "next_unit_price": contract_unit_price(o) if is_open else 0,
         "advance_paid": s.get("payment", 0),
         "advance_held": held,
-        "balance": max(o.agreed_price - held, 0) if o.status == "open" else 0,
+        "balance": max(o.agreed_price - delivered_value_of(o) - held, 0) if is_open else 0,
         "order_date": local_date_str(o.order_date),
         "expected_delivery_date": o.expected_delivery_date.isoformat() if o.expected_delivery_date else None,
         "status": o.status,
         "notes": o.notes,
         "unit_id": o.unit_id,
-        "overdue": bool(o.status == "open" and o.expected_delivery_date and o.expected_delivery_date < today),
+        "overdue": bool(is_open and o.expected_delivery_date and o.expected_delivery_date < today),
     }
 
 
@@ -179,7 +212,9 @@ class AdvanceOrderCreate(BaseModel):
     customer_id: int
     product_id: int
     color: str | None = None
-    agreed_price: int
+    agreed_price: int                 # সব ইউনিট মিলিয়ে মোট চুক্তির মূল্য
+    quantity: int = 1
+    unit_price: int | None = None
     expected_delivery_date: date | None = None
     notes: str | None = None
     advance_amount: int = 0
@@ -188,6 +223,7 @@ class AdvanceOrderCreate(BaseModel):
 
 class AdvanceOrderUpdate(BaseModel):
     agreed_price: int | None = None
+    quantity: int | None = None
     color: str | None = None
     expected_delivery_date: date | None = None
     notes: str | None = None
@@ -227,6 +263,8 @@ def build_advance_router(get_current_user):
             raise HTTPException(status_code=404, detail="কাস্টমার পাওয়া যায়নি")
         if not db.query(Product).filter(Product.id == payload.product_id).first():
             raise HTTPException(status_code=404, detail="প্রোডাক্ট পাওয়া যায়নি")
+        if payload.quantity < 1:
+            raise HTTPException(status_code=400, detail="কমপক্ষে ১ ইউনিট দিতে হবে")
         if payload.agreed_price <= 0:
             raise HTTPException(status_code=400, detail="মূল্য শূন্যের বেশি হতে হবে")
         if payload.advance_amount < 0 or payload.advance_amount > payload.agreed_price:
@@ -237,6 +275,10 @@ def build_advance_router(get_current_user):
             product_id=payload.product_id,
             color=(payload.color or "").strip() or None,
             agreed_price=payload.agreed_price,
+            quantity=payload.quantity,
+            unit_price=payload.unit_price or (payload.agreed_price // payload.quantity),
+            delivered_qty=0,
+            delivered_value=0,
             expected_delivery_date=payload.expected_delivery_date,
             notes=(payload.notes or "").strip() or None,
             status="open",
@@ -277,11 +319,32 @@ def build_advance_router(get_current_user):
         order = get_order(db, order_id, current_user)
         require_open(order)
         data = payload.dict(exclude_unset=True)
-        if data.get("agreed_price") is not None:
+        dq = delivered_qty_of(order)
+
+        new_qty = data.get("quantity")
+        if new_qty is not None:
+            if new_qty < max(dq, 1):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"ইউনিট সংখ্যা ডেলিভারি হওয়া {dq} টির চেয়ে কম বা ১-এর কম হতে পারে না",
+                )
+            order.quantity = new_qty
+
+        new_price = data.get("agreed_price")
+        if new_price is not None:
             held = held_of(sums_for(db, [order.id]).get(order.id, {}))
-            if data["agreed_price"] <= 0 or data["agreed_price"] < held:
-                raise HTTPException(status_code=400, detail="মূল্য শূন্য বা এখন পর্যন্ত জমা অগ্রিমের চেয়ে কম হতে পারে না")
-            order.agreed_price = data["agreed_price"]
+            if new_price <= 0 or new_price < held + delivered_value_of(order):
+                raise HTTPException(
+                    status_code=400,
+                    detail="মূল্য শূন্য বা (ডেলিভারি হওয়া ইউনিটের মূল্য + জমা অগ্রিম)-এর চেয়ে কম হতে পারে না",
+                )
+            order.agreed_price = new_price
+
+        if new_qty is not None or new_price is not None:
+            left = qty_of(order) - dq
+            if left > 0:
+                order.unit_price = (order.agreed_price - delivered_value_of(order)) // left
+
         if "color" in data:
             order.color = (data["color"] or "").strip() or None
         if "expected_delivery_date" in data:
@@ -300,10 +363,11 @@ def build_advance_router(get_current_user):
         if payload.amount <= 0:
             raise HTTPException(status_code=400, detail="পরিমাণ শূন্যের বেশি হতে হবে")
         held = held_of(sums_for(db, [order.id]).get(order.id, {}))
-        if held + payload.amount > order.agreed_price:
+        room = order.agreed_price - delivered_value_of(order) - held
+        if payload.amount > room:
             raise HTTPException(
                 status_code=400,
-                detail=f"মোট অগ্রিম অর্ডারের মূল্যের বেশি হতে পারে না (আর সর্বোচ্চ ৳{order.agreed_price - held} নেওয়া যাবে)",
+                detail=f"মোট অগ্রিম অর্ডারের মূল্যের বেশি হতে পারে না (আর সর্বোচ্চ ৳{room} নেওয়া যাবে)",
             )
         receive_advance(db, order, payload.amount, payload.payment_mode, (payload.note or "").strip() or None)
         db.commit()
@@ -329,14 +393,20 @@ def build_advance_router(get_current_user):
 
         branch_id = order.branch_id
 
-        price = payload.sold_price if payload.sold_price is not None else order.agreed_price
+        contract_price = contract_unit_price(order)
+        price = payload.sold_price if payload.sold_price is not None else contract_price
         if price <= 0:
             raise HTTPException(status_code=400, detail="বিক্রয় মূল্য শূন্যের বেশি হতে হবে")
 
+        is_last = (qty_of(order) - delivered_qty_of(order)) <= 1
         held = held_of(sums_for(db, [order.id]).get(order.id, {}))
-        if held > price:
-            raise HTTPException(status_code=400, detail="জমা অগ্রিম বিক্রয় মূল্যের চেয়ে বেশি — আগে মূল্য ঠিক করুন")
-        remaining = price - held
+        if is_last and held > price:
+            raise HTTPException(
+                status_code=400,
+                detail="জমা অগ্রিম শেষ ইউনিটের বিক্রয় মূল্যের চেয়ে বেশি — আগে অর্ডারের মূল্য ঠিক করুন",
+            )
+        applied = min(held, price)          # এই ইউনিটে যত অগ্রিম সমন্বয় হবে
+        remaining = price - applied
         if payload.pay_now < 0 or payload.pay_now > remaining:
             raise HTTPException(status_code=400, detail=f"এখন নেওয়া টাকা ০ থেকে ৳{remaining}-এর মধ্যে হতে হবে")
         due = remaining - payload.pay_now
@@ -356,11 +426,11 @@ def build_advance_router(get_current_user):
 
         income = get_or_create_account(db, "Sales Income", "income", branch_id)
         db.add(VoucherEntry(voucher_id=voucher.id, account_id=income.id, debit=0, credit=price))
-        if held > 0:
+        if applied > 0:
             adv = get_or_create_account(db, ADVANCE_ACCOUNT, "advance", branch_id)
             db.add(VoucherEntry(voucher_id=voucher.id, account_id=adv.id,
-                                party_id=order.customer_id, debit=held, credit=0))
-            db.add(AdvancePayment(order_id=order.id, kind="applied", amount=held, payment_mode="adjust",
+                                party_id=order.customer_id, debit=applied, credit=0))
+            db.add(AdvancePayment(order_id=order.id, kind="applied", amount=applied, payment_mode="adjust",
                                   voucher_id=voucher.id, note=f"বিক্রয় ভাউচার #{voucher.id}-এ সমন্বয়"))
         if payload.pay_now > 0:
             money = money_account(db, payload.payment_mode, branch_id)
@@ -371,8 +441,11 @@ def build_advance_router(get_current_user):
             db.add(VoucherEntry(voucher_id=voucher.id, account_id=receivable.id,
                                 party_id=order.customer_id, debit=due, credit=0))
 
-        order.status = "delivered"
+        order.delivered_qty = delivered_qty_of(order) + 1
+        order.delivered_value = delivered_value_of(order) + contract_price
         order.unit_id = unit.id
+        if order.delivered_qty >= qty_of(order):
+            order.status = "delivered"
         db.commit()
 
         customer = db.query(Party).filter(Party.id == order.customer_id).first()
@@ -381,7 +454,7 @@ def build_advance_router(get_current_user):
                 send_sms(
                     customer.phone,
                     f"প্রিয় {customer.name}, আপনার বাইক ডেলিভারি সম্পন্ন হয়েছে। মূল্য: ৳{price}, "
-                    f"অগ্রিম: ৳{held}, বাকি: ৳{due}। ধন্যবাদ — Showroom ERP",
+                    f"অগ্রিম: ৳{applied}, বাকি: ৳{due}। ধন্যবাদ — Showroom ERP",
                 )
             except Exception:
                 pass
@@ -390,7 +463,7 @@ def build_advance_router(get_current_user):
         return {
             "voucher_id": voucher.id,
             "price": price,
-            "advance_applied": held,
+            "advance_applied": applied,
             "paid_now": payload.pay_now,
             "due": due,
             "chassis_no": unit.chassis_no,
