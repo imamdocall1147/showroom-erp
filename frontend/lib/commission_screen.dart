@@ -100,8 +100,8 @@ class _CommissionScreenState extends State<CommissionScreen> {
         }
       } catch (_) {}
       _selected.removeWhere((id) => !_pending.any((c) => c["id"] == id));
-    } catch (e) {
-      setState(() => _error = "সার্ভারের সাথে সংযোগ করা যায়নি");
+        } catch (e) {
+      setState(() => _error = "সমস্যা: $e");
     } finally {
       if (mounted) setState(() => _loading = false);
     }
