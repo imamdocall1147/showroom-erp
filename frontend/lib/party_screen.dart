@@ -425,6 +425,66 @@ class _AddPartyScreenState extends State<AddPartyScreen> {
       }
     }
   }
+  Future<void> _addAreaDialog() async {
+    final controller = TextEditingController();
+    final name = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text("নতুন এলাকা"),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(labelText: "এলাকার নাম"),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text("বাতিল"),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+            child: const Text("যোগ করুন"),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+
+    if (name == null || name.isEmpty) return;
+
+    // একই নাম আগে থেকে থাকলে নতুন না বানিয়ে সেটাই বেছে নিন
+    final existing = _areas.where(
+      (a) => "${a["name"]}".toLowerCase() == name.toLowerCase(),
+    );
+    if (existing.isNotEmpty) {
+      setState(() => _selectedAreaId = existing.first["id"] as int?);
+      return;
+    }
+
+    try {
+      final res = await http.post(
+        Uri.parse("$apiBaseUrl/areas"),
+        headers: _headers,
+        body: jsonEncode({"name": name}),
+      );
+      if (res.statusCode == 200) {
+        final created = jsonDecode(utf8.decode(res.bodyBytes));
+        await _loadAreas();
+        if (!mounted) return;
+        setState(() => _selectedAreaId = created["id"] as int?);
+      } else {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(_msgFrom(res, "এলাকা যোগ হয়নি (${res.statusCode})"))),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("সার্ভারের সাথে সংযোগ করা যায়নি")),
+      );
+    }
+  }
 
   Future<void> _pickDate() async {
     final d = await showDatePicker(
@@ -706,23 +766,40 @@ class _AddPartyScreenState extends State<AddPartyScreen> {
                       ),
                     ],
                     const SizedBox(height: 16),
-                    DropdownButtonFormField<int>(
-                      initialValue: _selectedAreaId,
-                      decoration: const InputDecoration(
-                        labelText: "এলাকা (ঐচ্ছিক)",
-                        border: OutlineInputBorder(),
-                      ),
-                      items: _areas.map<DropdownMenuItem<int>>((a) {
-                        return DropdownMenuItem<int>(
-                          value: a["id"],
-                          child: Text("${a["name"]}"),
-                        );
-                      }).toList(),
-                      onChanged: (value) {
-                        setState(() {
-                          _selectedAreaId = value;
-                        });
-                      },
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: DropdownButtonFormField<int>(
+                            key: ValueKey(_selectedAreaId),
+                            initialValue: _selectedAreaId,
+                            decoration: const InputDecoration(
+                              labelText: "এলাকা (ঐচ্ছিক)",
+                              border: OutlineInputBorder(),
+                            ),
+                            items: _areas.map<DropdownMenuItem<int>>((a) {
+                              return DropdownMenuItem<int>(
+                                value: a["id"],
+                                child: Text("${a["name"]}"),
+                              );
+                            }).toList(),
+                            onChanged: (value) {
+                              setState(() {
+                                _selectedAreaId = value;
+                              });
+                            },
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: IconButton.filledTonal(
+                            icon: const Icon(Icons.add),
+                            tooltip: "নতুন এলাকা",
+                            onPressed: _addAreaDialog,
+                          ),
+                        ),
+                      ],
                     ),
                     if (_errorMessage != null) ...[
                       const SizedBox(height: 16),
