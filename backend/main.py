@@ -2330,3 +2330,43 @@ def edit_sale(unit_id: int, payload: SaleEditRequest, db: Session = Depends(get_
     db.commit()
     db.refresh(unit)
     return _sale_dict(db, unit)
+
+@app.delete("/units/{unit_id}/sale")
+def cancel_sale(unit_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    role_name = (current_user.role.name if getattr(current_user, "role", None) else "") or ""
+    if role_name.strip().lower() != "admin":
+        raise HTTPException(status_code=403, detail="শুধু অ্যাডমিন বিক্রয় বাতিল করতে পারবেন")
+
+    unit = db.query(Unit).filter(Unit.id == unit_id).first()
+    if not unit or unit.status != "sold":
+        raise HTTPException(status_code=404, detail="বিক্রি হওয়া গাড়ী পাওয়া যায়নি")
+
+    branch_id = unit.warehouse.branch_id if unit.warehouse else None
+    bid = scope_branch(current_user)
+    if bid and branch_id != bid:
+        raise HTTPException(status_code=400, detail="এই গাড়ী অন্য শোরুমের")
+
+    # গ্রহণ করা কমিশন থাকলে আটকাবে
+    from backend.commission import UnitCommission
+    received = db.query(UnitCommission).filter(
+        UnitCommission.unit_id == unit.id, UnitCommission.status == "received").first()
+    if received:
+        raise HTTPException(status_code=400, detail="এই গাড়ির কমিশন গ্রহণ করা হয়েছে, আগে তা মিলিয়ে নিন")
+
+    # বিক্রয়ের ভাউচার ও এন্ট্রি মুছুন
+    vouchers = db.query(Voucher).filter(
+        Voucher.voucher_type == "sale", Voucher.reference == unit.chassis_no).all()
+    for v in vouchers:
+        db.query(VoucherEntry).filter(VoucherEntry.voucher_id == v.id).delete()
+        db.delete(v)
+
+    # গাড়ি আবার স্টকে
+    unit.status = "in_stock"
+    unit.sold_price = None
+    unit.decoration_cost = 0
+    unit.registration_cost = 0
+    unit.sold_date = None
+    unit.customer_id = None
+    unit.sold_by_partner_id = None
+    db.commit()
+    return {"ok": True, "unit_id": unit.id}
