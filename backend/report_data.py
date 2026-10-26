@@ -1067,6 +1067,8 @@ def r_business_summary(db, f, m):
 
     d, c, _ = entries_sum(db, f, Account.name == "Spare Parts Income")
     parts_income = c - d
+    d, c, _ = entries_sum(db, f, Account.name == "Commission Income")
+    commission_income = c - d
 
     bikes = purchase_rows(db, Filters(from_=f.from_, to=f.to, branch_id=f.branch_id), m)
     bike_purchase = sum(r["price"] for r in bikes)
@@ -1088,6 +1090,7 @@ def r_business_summary(db, f, m):
         {"label": "বিক্রীত বাইকের ক্রয় মূল্য", "count": None, "amount": cost},
         {"label": "বাইক বিক্রয়ে লাভ", "count": None, "amount": profit},
         {"label": "স্পেয়ার পার্টস বিক্রয়", "count": None, "amount": parts_income},
+        {"label": "কোম্পানি থেকে প্রাপ্ত কমিশন", "count": None, "amount": commission_income},
         {"label": "বাইক ক্রয়", "count": len(bikes), "amount": bike_purchase},
         {"label": "স্পেয়ার পার্টস ক্রয়", "count": None, "amount": parts_purchase},
         {"label": "নগদ বিক্রয়", "count": None, "amount": cash_sales},
@@ -1095,7 +1098,7 @@ def r_business_summary(db, f, m):
         {"label": "মোট কালেকশন (নগদ বিক্রয় + বাকি আদায়)", "count": None, "amount": cash_sales + collected},
         {"label": "দোকান খরচ", "count": len(exp), "amount": expenses},
         {"label": "আনুমানিক নিট লাভ (স্পেয়ার পার্টসের ক্রয় খরচ ধরা হয়নি)", "count": None,
-         "amount": profit + parts_income - expenses},
+        "amount": profit + parts_income + commission_income - expenses},
         {"label": "— এখনকার অবস্থা (আজ পর্যন্ত) —", "count": None, "amount": None},
         {"label": "ক্যাশ ব্যালান্স", "count": None, "amount": balance_by_type(db, f, ["cash"])},
         {"label": "ব্যাংক ব্যালান্স", "count": None, "amount": balance_by_type(db, f, ["bank"])},
@@ -1114,15 +1117,18 @@ def r_profit_loss(db, f, m):
     cost = sum(r["purchase_price"] for r in sales)
     d, c, _ = entries_sum(db, f, Account.name == "Spare Parts Income")
     parts_income = c - d
+    d, c, _ = entries_sum(db, f, Account.name == "Commission Income")
+    commission_income = c - d
     expenses = sum(r["amount"] for r in expense_rows(db, f))
     rows = [
         {"label": "বাইক বিক্রয় (আয়)", "amount": sold},
         {"label": "(−) বিক্রীত বাইকের ক্রয় মূল্য", "amount": cost},
         {"label": "বাইক বিক্রয়ে মোট লাভ", "amount": sold - cost},
         {"label": "(+) স্পেয়ার পার্টস বিক্রয় (ক্রয় খরচ হিসাবে নেই)", "amount": parts_income},
-        {"label": "মোট আয়", "amount": sold - cost + parts_income},
+        {"label": "(+) কোম্পানি থেকে প্রাপ্ত কমিশন", "amount": commission_income},
+        {"label": "মোট আয়", "amount": sold - cost + parts_income + commission_income},
         {"label": "(−) দোকান খরচ", "amount": expenses},
-        {"label": "নিট লাভ", "amount": sold - cost + parts_income - expenses},
+        {"label": "নিট লাভ", "amount": sold - cost + parts_income + commission_income - expenses},
     ]
     return out([col("label", "বিবরণ"), col("amount", "টাকা", "money")], rows)
 
