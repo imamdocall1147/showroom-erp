@@ -2370,3 +2370,92 @@ def cancel_sale(unit_id: int, db: Session = Depends(get_db), current_user: User 
     unit.sold_by_partner_id = None
     db.commit()
     return {"ok": True, "unit_id": unit.id}
+
+# ---------------------------------------------------------------
+# বিক্রয় ফেরত: ভুলে বিক্রি হওয়া গাড়ী স্টকে ফিরিয়ে আনা (ইতিহাস থাকে)
+# ---------------------------------------------------------------
+class SaleReturnRequest(BaseModel):
+    reason: str | None = None
+    keep_as_advance: bool = False  # true = জমা টাকা ফেরত না দিয়ে কাস্টমারের নামে অগ্রিম রাখা
+
+
+@app.post("/units/{unit_id}/return-sale")
+def return_sale(unit_id: int, payload: SaleReturnRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    _sale_admin(current_user)
+
+    unit = db.query(Unit).filter(Unit.id == unit_id).first()
+    if not unit or unit.status != "sold":
+        raise HTTPException(status_code=404, detail="বিক্রি হওয়া গাড়ী পাওয়া যায়নি")
+
+    branch_id = unit.warehouse.branch_id if unit.warehouse else None
+    bid = scope_branch(current_user)
+    if bid and branch_id != bid:
+        raise HTTPException(status_code=400, detail="এই গাড়ী অন্য শোরুমের")
+
+    from backend.commission import UnitCommission
+    received = db.query(UnitCommission).filter(
+        UnitCommission.unit_id == unit.id, UnitCommission.status == "received").first()
+    if received:
+        raise HTTPException(status_code=400, detail="এই গাড়ির কমিশন গ্রহণ করা হয়েছে, আগে তা মিলিয়ে নিন")
+
+    old_vouchers = (
+        db.query(Voucher)
+        .filter(Voucher.voucher_type == "sale", Voucher.reference == unit.chassis_no)
+        .order_by(Voucher.id)
+        .all()
+    )
+    if not old_vouchers:
+        raise HTTPException(status_code=400, detail="এই বিক্রয়ের ভাউচার পাওয়া যায়নি")
+
+    reason = (payload.reason or "").strip()[:120] or "বিক্রয় ফেরত"
+    ret = Voucher(
+        voucher_type="sale_return",
+        narration=f"Unit #{unit.id} ({unit.chassis_no}) বিক্রয় ফেরত — {reason}",
+        reference=f"return-{unit.chassis_no}",
+        voucher_date=datetime.utcnow(),
+    )
+    db.add(ret)
+    db.flush()
+
+    rec = get_or_create_account(db, "Accounts Receivable", "receivable", branch_id)
+    refunded_cash = 0
+    kept_advance = 0
+
+    for v in old_vouchers:
+        for e in db.query(VoucherEntry).filter(VoucherEntry.voucher_id == v.id).all():
+            account_id = e.account_id
+            party_id = e.party_id
+            # জমা নেওয়া নগদ টাকা: ফেরত দেওয়া (Cash কমবে) অথবা কাস্টমারের অগ্রিম হিসেবে রাখা
+            if e.account and e.account.name == "Cash" and (e.debit or 0) > 0:
+                if payload.keep_as_advance:
+                    account_id = rec.id
+                    party_id = e.party_id or unit.customer_id
+                    kept_advance += e.debit
+                else:
+                    refunded_cash += e.debit
+            db.add(VoucherEntry(
+                voucher_id=ret.id,
+                account_id=account_id,
+                party_id=party_id,
+                debit=e.credit or 0,   # উল্টো এন্ট্রি
+                credit=e.debit or 0,
+            ))
+        # পুরোনো ভাউচারের রেফারেন্স বদলে দিই, যাতে আবার বিক্রয়ে নতুন ভাউচারটাই খুঁজে পায়
+        v.reference = f"{unit.chassis_no}~r{v.id}"
+
+    unit.status = "in_stock"
+    unit.sold_price = None
+    unit.decoration_cost = 0
+    unit.registration_cost = 0
+    unit.sold_date = None
+    unit.customer_id = None
+    unit.sold_by_partner_id = None
+    db.commit()
+
+    return {
+        "ok": True,
+        "unit_id": unit.id,
+        "return_voucher_id": ret.id,
+        "cash_refunded": refunded_cash,
+        "kept_as_advance": kept_advance,
+    }
