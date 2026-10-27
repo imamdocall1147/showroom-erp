@@ -1308,7 +1308,7 @@ REPORTS = {
     "fast_moving": r_fast_moving,
     "slow_moving": r_slow_moving,
     "stock_in_out": r_stock_in_out,
-    "stock_transfer": r_stock_transfers,
+    "stock_transfer": r_stock_transfer,
     "product_movement": r_stock_in_out,
     "low_stock": unsupported("প্রোডাক্টের সর্বনিম্ন স্টক সীমা ঠিক করা নেই। সীমা যোগ করলে এই রিপোর্ট চালু হবে।"),
     "stock_adjustment": unsupported("স্টক সমন্বয় রেকর্ড করার ব্যবস্থা এখনো নেই।"),
