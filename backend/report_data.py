@@ -1330,7 +1330,61 @@ REPORTS = {
     "cash_flow": r_cash_flow,
     "bank_balance": r_bank_balance,
 }
+# ---------------------------------------------------------------
+# রিপোর্টের উপরে দেখানোর সারসংক্ষেপ (মোট কত বাইক / কত জন কাস্টমার ইত্যাদি)
+# ---------------------------------------------------------------
+BIKE_ROW_REPORTS = {
+    "daily_sales", "monthly_sales", "invoice_sales",
+    "daily_purchase", "monthly_purchase",
+    "current_stock", "serial_stock", "dead_stock",
+}
+BIKE_QTY_REPORTS = {
+    "showroom_sales", "product_sales", "category_sales", "brand_sales",
+    "customer_sales", "payment_method_sales",
+    "supplier_purchase", "product_purchase",
+}
 
+
+def add_summary(key, result):
+    cols = result.get("columns") or []
+    rows = result.get("rows") or []
+    totals = result.get("totals") or {}
+    if not rows or (cols and cols[0].get("key") == "msg"):
+        return result
+    cnt = len(rows)
+    text = None
+    if key in BIKE_ROW_REPORTS:
+        text = f"মোট {cnt} টি বাইক"
+    elif key in BIKE_QTY_REPORTS:
+        text = f"মোট {n(totals.get('qty'))} টি বাইক"
+    elif key in ("showroom_stock", "warehouse_stock"):
+        text = f"মোট {n(totals.get('bikes'))} টি বাইক স্টকে আছে"
+    elif key == "stock_valuation":
+        bikes = sum(n(r.get("qty")) for r in rows if r.get("category") != "স্পেয়ার পার্টস")
+        text = f"মোট {bikes} টি বাইক স্টকে আছে"
+    elif key in ("fast_moving", "slow_moving"):
+        text = f"মোট বিক্রি {n(totals.get('sold_qty'))} টি, এখন স্টকে {n(totals.get('stock_qty'))} টি"
+    elif key in ("stock_in_out", "product_movement"):
+        came = sum(1 for r in rows if r.get("type") == "স্টকে এসেছে")
+        sold = sum(1 for r in rows if r.get("type") == "বিক্রি হয়েছে")
+        text = f"স্টকে এসেছে {came} টি, বিক্রি হয়েছে {sold} টি"
+    elif key == "out_of_stock":
+        text = f"{cnt} টি মডেল স্টকে নেই"
+    elif key in ("customer_due", "receivable", "overdue_customers"):
+        text = f"মোট {cnt} জন কাস্টমারের বাকি আছে"
+    elif key == "area_due":
+        text = f"মোট {n(totals.get('customers'))} জন কাস্টমারের বাকি আছে"
+    elif key == "customer_sales_due_summary":
+        text = f"{cnt} জন কাস্টমার, মোট {n(totals.get('qty'))} টি বাইক বিক্রয়"
+    elif key in ("payable", "purchase_due"):
+        text = f"মোট {cnt} জন সাপ্লায়ারের পাওনা আছে"
+    elif key == "customer_payment_history":
+        text = f"মোট {cnt} বার জমা"
+    elif key == "advance_orders":
+        text = f"মোট {cnt} টি অগ্রিম অর্ডার"
+    if text:
+        result["summary"] = text
+    return result
 
 def build_router(get_current_user):
     router = APIRouter()
@@ -1363,6 +1417,6 @@ def build_router(get_current_user):
             payment_mode=payment_mode, area=area, account=account, q=q, days=days,
             branch_id=getattr(current_user, "active_branch_id", None),
         )
-        return handler(db, f, Maps(db))
+        return add_summary(key, handler(db, f, Maps(db)))
 
     return router
