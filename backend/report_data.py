@@ -1308,6 +1308,7 @@ REPORTS = {
     "fast_moving": r_fast_moving,
     "slow_moving": r_slow_moving,
     "stock_in_out": r_stock_in_out,
+    "stock_transfer": r_stock_transfers,
     "product_movement": r_stock_in_out,
     "low_stock": unsupported("প্রোডাক্টের সর্বনিম্ন স্টক সীমা ঠিক করা নেই। সীমা যোগ করলে এই রিপোর্ট চালু হবে।"),
     "stock_adjustment": unsupported("স্টক সমন্বয় রেকর্ড করার ব্যবস্থা এখনো নেই।"),
@@ -1384,6 +1385,66 @@ def add_summary(key, result):
         text = f"মোট {cnt} টি অগ্রিম অর্ডার"
     if text:
         result["summary"] = text
+    return result
+def r_stock_transfers(db, f, m):
+    from sqlalchemy import or_
+    from backend.models import StockTransfer
+
+    q = db.query(StockTransfer)
+    if f.branch_id:
+        q = q.filter(or_(StockTransfer.from_branch_id == f.branch_id,
+                         StockTransfer.to_branch_id == f.branch_id))
+    if f.start:
+        q = q.filter(StockTransfer.transfer_date >= f.start)
+    if f.end:
+        q = q.filter(StockTransfer.transfer_date < f.end)
+    if f.warehouse_id:
+        q = q.filter(or_(StockTransfer.from_warehouse_id == f.warehouse_id,
+                         StockTransfer.to_warehouse_id == f.warehouse_id))
+    transfers = q.order_by(StockTransfer.transfer_date, StockTransfer.id).all()
+
+    units = {}
+    if transfers:
+        ids = [t.unit_id for t in transfers]
+        units = {u.id: u for u in db.query(Unit).filter(Unit.id.in_(ids)).all()}
+
+    rows = []
+    for t in transfers:
+        u = units.get(t.unit_id)
+        pid = u.product_id if u else None
+        if f.product_id and pid != f.product_id:
+            continue
+        if (f.brand or f.category) and (pid is None or not product_ok(f, m, pid)):
+            continue
+        if f.q and (not u or f.q.lower() not in f"{u.chassis_no} {u.engine_no}".lower()):
+            continue
+        rows.append({
+            "date": (t.transfer_date + LOCAL_OFFSET).strftime("%Y-%m-%d %H:%M") if t.transfer_date else None,
+            "batch": f"#{t.batch_no}",
+            "chassis": u.chassis_no if u else "—",
+            "engine": u.engine_no if u else "—",
+            "model": m.model(pid) if pid else None,
+            "brand": m.brand_name(pid) if pid else None,
+            "from_branch": m.branch_name(t.from_branch_id),
+            "from_wh": m.wh(t.from_warehouse_id),
+            "to_branch": m.branch_name(t.to_branch_id),
+            "to_wh": m.wh(t.to_warehouse_id),
+            "by_user": t.by_user,
+            "note": t.note or "",
+        })
+
+    cols = [
+        col("date", "তারিখ ও সময়"), col("batch", "ব্যাচ নং"),
+        col("chassis", "চেসিস নম্বর"), col("engine", "ইঞ্জিন নম্বর"),
+        col("model", "মডেল"), col("brand", "ব্র্যান্ড"),
+        col("from_branch", "কোন শোরুম থেকে"), col("from_wh", "কোন গোডাউন থেকে"),
+        col("to_branch", "কোন শোরুমে"), col("to_wh", "কোন গোডাউনে"),
+        col("by_user", "কে পাঠিয়েছেন"), col("note", "মন্তব্য"),
+    ]
+    result = out(cols, rows, {"date": f"মোট {len(rows)} টি বাইক"} if rows else {})
+    if rows:
+        batches = len({r["batch"] for r in rows})
+        result["summary"] = f"মোট {len(rows)} টি বাইক ট্রান্সফার ({batches} ব্যাচে)"
     return result
 
 def build_router(get_current_user):
