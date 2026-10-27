@@ -1266,7 +1266,8 @@ def unsupported(text):
     def fn(db, f, m):
         return message(text)
     return fn
-
+def r_stock_transfer():
+    return "Stock Transfer Report"
 
 REPORTS = {
     # ম্যানেজমেন্ট
