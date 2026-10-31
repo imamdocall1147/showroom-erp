@@ -236,7 +236,9 @@ class _InvoiceScreenState extends State<InvoiceScreen> {
   bool _withChallan = true;
   bool _noHeader = false;
   bool _transferMode = false;
-
+  double _marginH = 40; // বাঁ-ডান
+  double _marginTop = 36;
+  double _marginBottom = 30;
   String get _key => widget.storageKey ?? "inv_${widget.invoiceTitle}_${widget.invoiceNumber}";
 
   int get _paid =>
@@ -775,7 +777,55 @@ class _InvoiceScreenState extends State<InvoiceScreen> {
       ),
     );
   }
+  Widget _toolbar() {
+    Widget slider(String label, double value, double max, ValueChanged<double> onCh) {
+      return SizedBox(
+        width: 190,
+        child: Row(
+          children: [
+            Text("$label ${value.round()}", style: const TextStyle(fontSize: 12)),
+            Expanded(
+              child: Slider(value: value, min: 0, max: max, onChanged: onCh),
+            ),
+          ],
+        ),
+      );
+    }
 
+    return Material(
+      color: Colors.white,
+      elevation: 2,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        child: Wrap(
+          spacing: 10,
+          runSpacing: 4,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            FilledButton.icon(
+              style: FilledButton.styleFrom(
+                backgroundColor: _noHeader ? Colors.green.shade700 : Colors.indigo,
+              ),
+              icon: Icon(_noHeader ? Icons.visibility : Icons.visibility_off, size: 18),
+              label: Text(_noHeader ? "হেডার সহ" : "হেডার ছাড়া"),
+              onPressed: _loading ? null : () => setState(() => _noHeader = !_noHeader),
+            ),
+            FilledButton.icon(
+              style: FilledButton.styleFrom(
+                backgroundColor: _transferMode ? Colors.green.shade700 : Colors.deepOrange,
+              ),
+              icon: const Icon(Icons.swap_horiz, size: 18),
+              label: Text(_transferMode ? "কাস্টমার এর কাছে বিক্রয়" : "শোরুম ট্রান্সফার"),
+              onPressed: _loading ? null : _toggleTransfer,
+            ),
+            slider("বাঁ-ডান", _marginH, 100, (v) => setState(() => _marginH = v)),
+            slider("উপর", _marginTop, 100, (v) => setState(() => _marginTop = v)),
+            slider("নিচ", _marginBottom, 100, (v) => setState(() => _marginBottom = v)),
+          ],
+        ),
+      ),
+    );
+  }
   Widget _page() {
     return SizedBox(
       width: _w,
@@ -783,7 +833,7 @@ class _InvoiceScreenState extends State<InvoiceScreen> {
       child: ColoredBox(
         color: Colors.white,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(40, 36, 40, 30),
+        padding: EdgeInsets.fromLTRB(_marginH, _marginTop, _marginH, _marginBottom),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -820,21 +870,7 @@ class _InvoiceScreenState extends State<InvoiceScreen> {
       appBar: AppBar(
         title: Text(widget.invoiceTitle),
         actions: [
-            TextButton(
-            onPressed: _loading ? null : () => setState(() => _noHeader = !_noHeader),
-            child: Text(
-              _noHeader ? "হেডার সহ" : "হেডার ছাড়া",
-              style: const TextStyle(color: Colors.white),
-            ),
-          ),
-          TextButton(
-            onPressed: _loading ? null : _toggleTransfer,
-            child: Text(
-              _transferMode ? "কাস্টমার এর কাছে বিক্রয়" : "শোরুম ট্রান্সফার",
-              style: const TextStyle(color: Colors.white),
-            ),
-          ),
-          IconButton(
+           IconButton(
             tooltip: "এডিট (লেখা, টাকা, রঙ, সব কিছু)",
             icon: const Icon(Icons.edit),
             onPressed: _loading ? null : _edit,
@@ -852,19 +888,26 @@ class _InvoiceScreenState extends State<InvoiceScreen> {
           ),
         ],
       ),
-      body: _loading
+            body: _loading
           ? const Center(child: CircularProgressIndicator())
-          : SingleChildScrollView(
-              padding: const EdgeInsets.all(12),
-              child: Center(
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 820),
-                  child: FittedBox(
-                    fit: BoxFit.scaleDown,
-                    child: RepaintBoundary(key: _boundary, child: _page()),
+          : Column(
+              children: [
+                _toolbar(),
+                Expanded(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.all(12),
+                    child: Center(
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 820),
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: RepaintBoundary(key: _boundary, child: _page()),
+                        ),
+                      ),
+                    ),
                   ),
                 ),
-              ),
+              ],
             ),
     );
   }
