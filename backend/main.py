@@ -20,7 +20,7 @@ from backend import challan_import
 from backend.database import engine, get_db
 from backend.models import (
     Base, User, Role, Company, Branch, Warehouse,
-    Brand, Product, Area, Party, Unit,
+    Brand, Product, Area, Party, Unit,     ChallanFile,
     Account, Voucher, VoucherEntry, SparePart, SupplierOrder,
     StockTransfer,
     Partner,
@@ -47,6 +47,7 @@ def _ensure_new_columns():
         ("advance_orders", "unit_price", "INTEGER"),
         ("advance_orders", "delivered_qty", "INTEGER DEFAULT 0"),
         ("advance_orders", "delivered_value", "INTEGER DEFAULT 0"),
+        ("units", "challan_id", "INTEGER"),
     ]
     for table, col, typ in wanted:
         try:
@@ -516,6 +517,7 @@ class UnitPurchaseCreate(BaseModel):
     payment_mode: str = "cash"
     advance_used: int = 0  # এই সাপ্লায়ারকে আগে দেওয়া অগ্রিম থেকে যত টাকা কাটা হবে
     order_id: int | None = None  # সাপ্লায়ার-অর্ডারের আওতায় এলে অর্ডারের id
+    challan_url: str | None = None  # চালানের PDF-এর লিংক (কপি রাখার জন্য)
 
 
 class UnitSellRequest(BaseModel):
@@ -618,7 +620,29 @@ def get_or_create_account(db: Session, name: str, account_type: str, branch_id: 
         db.commit()
         db.refresh(account)
     return account
-
+def _challan_id_for(db: Session, url: str | None):
+    """চালানের PDF-এর কপি ডাটাবেসে রাখে (একই চালান একবারই), id ফেরত দেয়।
+    না পারলে None, ক্রয় আটকায় না।"""
+    url = (url or "").strip()
+    if not url:
+        return None
+    try:
+        existing = db.query(ChallanFile).filter(ChallanFile.source_url == url[:500]).first()
+        if existing:
+            return existing.id
+        data = challan_import.fetch_pdf(url)
+        no = url.rsplit("/", 1)[-1]
+        if no.lower().endswith(".pdf"):
+            no = no[:-4]
+        row = ChallanFile(challan_no=no[:150], source_url=url[:500], pdf_data=data)
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return row.id
+    except Exception as e:
+        db.rollback()
+        logging.warning("চালানের কপি রাখা যায়নি: %s", e)
+        return None
 
 @app.post("/units/purchase")
 def purchase_unit(payload: UnitPurchaseCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
@@ -690,6 +714,7 @@ def purchase_unit(payload: UnitPurchaseCreate, db: Session = Depends(get_db), cu
         supplier_order_id=order.id if order else None,
         gate_pass_no=(payload.gate_pass_no or "").strip() or None,
         purchase_date=entry_dt,
+        challan_id=_challan_id_for(db, payload.challan_url),
         status="in_stock",
     )
     db.add(unit)
@@ -2469,3 +2494,18 @@ def return_sale(unit_id: int, payload: SaleReturnRequest, db: Session = Depends(
         "cash_refunded": refunded_cash,
         "kept_as_advance": kept_advance,
     }
+@app.get("/units/{unit_id}/challan")
+def get_unit_challan(unit_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    from fastapi.responses import Response
+
+    unit = db.query(Unit).filter(Unit.id == unit_id).first()
+    if not unit or not unit.challan_id:
+        raise HTTPException(status_code=404, detail="এই গাড়ীর চালানের কপি নেই")
+    bid = scope_branch(current_user)
+    branch_id = unit.warehouse.branch_id if unit.warehouse else None
+    if bid and branch_id != bid:
+        raise HTTPException(status_code=404, detail="এই গাড়ীর চালানের কপি নেই")
+    row = db.query(ChallanFile).filter(ChallanFile.id == unit.challan_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="এই গাড়ীর চালানের কপি নেই")
+    return Response(content=bytes(row.pdf_data), media_type="application/pdf")
