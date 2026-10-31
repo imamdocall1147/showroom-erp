@@ -296,3 +296,16 @@ AdvanceOrder.quantity = Column(Integer, default=1)          # কত ইউন�
 AdvanceOrder.unit_price = Column(Integer, nullable=True)    # প্রতি ইউনিটের চুক্তির দাম
 AdvanceOrder.delivered_qty = Column(Integer, default=0)     # কত ইউনিট ডেলিভারি হয়েছে
 AdvanceOrder.delivered_value = Column(Integer, default=0)   # ডেলিভারি হওয়া ইউনিটের চুক্তি মূল্য
+from sqlalchemy import LargeBinary
+class ChallanFile(Base):
+    __tablename__ = "challan_files"
+    id = Column(Integer, primary_key=True)
+    challan_no = Column(String(150))
+    source_url = Column(String(500))
+    pdf_data = Column(LargeBinary, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+    Unit.challan_id = Column(Integer, nullable=True)   # কোন চালান থেকে এসেছে
+    
+    
