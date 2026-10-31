@@ -6,7 +6,8 @@ import 'package:flutter/services.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
-
+import 'dart:convert';
+import 'package:shared_preferences/shared_preferences.dart';
 // ---------------------------------------------------------------
 // বিক্রয়ের পর BRTA-র কাগজপত্র। নমুনা এক্সেল ফাইলের সাতটা শিটের হুবহু ছাঁচে:
 //  ১. বিক্রয় প্রত্যয়ন   ২. সেলস ইনভয়েস (আড়াআড়ি)   ৩. অঙ্গীকারনামা
@@ -16,7 +17,53 @@ import 'package:printing/printing.dart';
 // ---------------------------------------------------------------
 
 const String _dots = '……………………';
+String _wordsTitle(int n) {
+  final w = _words(n).replaceAll('.', '');
+  return w
+      .split(' ')
+      .where((s) => s.isNotEmpty)
+      .map((s) => s[0] + s.substring(1).toLowerCase())
+      .join(' ');
+}
 
+/// "লেখা ........ লেখা" ধরনের ডটের লাইন; দুই প্রান্তের মাঝে ডট ভরে দেয়
+void _dotLine(_Abs a, String left, String right, double x1, double x2, double y, double size) {
+  a.p.buf.writeln('$left …… $right');
+  a.kids.add(Positioned(
+    left: x1 * a.sx,
+    width: (x2 - x1) * a.sx,
+    top: a._top(y, size),
+    child: Row(
+      children: [
+        Text(left, style: _st(size, b: false)),
+        Expanded(
+          child: ClipRect(
+            child: Text(
+              '.' * 300,
+              maxLines: 1,
+              softWrap: false,
+              overflow: TextOverflow.clip,
+              style: _st(size, b: false),
+            ),
+          ),
+        ),
+        Text(right, style: _st(size, b: false)),
+      ],
+    ),
+  ));
+}
+/// কাগজের নামের তালিকা (প্রতিটি কাগজের প্রিন্ট সেটিং এই নামে সংরক্ষিত হয়, ক্রম বদলাবেন না)
+const List<String> _paperTitles = [
+  "বিক্রয় প্রত্যয়ন",
+  "সেলস ইনভয়েস",
+  "অঙ্গীকারনামা",
+  "আবেদন ফর্ম",
+  "আবেদন ফর্ম ২",
+  "ডিলার ঘোষণা",
+  "ডেলিভারি চালান",
+  "মালিকের তথ্য",
+  "গেট পাস",
+];
 class _FieldDef {
   final String id;
   final String label;
@@ -81,7 +128,7 @@ const Map<String, List<_FieldDef>> _groups = {
     _FieldDef("year", "তৈরির সাল", keys: ["year"], type: TextInputType.number),
     _FieldDef("hp", "হর্স পাওয়ার", initial: "9.72 hp @5500 RPM"),
     _FieldDef("laden", "Laden Weight", initial: "719 KG"),
-    _FieldDef("wheelbase", "Wheel Base", initial: "2000MM"),
+    _FieldDef("wheelbase", "Wheel Base", initial: "2000 MM"),
     _FieldDef("seating", "আসন সংখ্যা", initial: "3+1= 4 (Four)"),
     _FieldDef("maker", "প্রস্তুতকারক (পুরো নাম)", initial: "BAJAJ AUTO LTD. INDIA."),
   ],
@@ -116,6 +163,30 @@ const Map<String, List<_FieldDef>> _groups = {
     _FieldDef("acc3", "Floor Mat", initial: "01 set"),
     _FieldDef("acc4", "Tool Kit", initial: "01pc"),
     _FieldDef("gate_no", "গেট পাস নম্বর (NO. এর পরে)", initial: "RAL/SB/3W/2026"),
+  ],
+    "প্রত্যয়ন, চালান ও ইনভয়েসের তথ্য": [
+    _FieldDef("brand", "BRAND", initial: "BAJAJ"),
+    _FieldDef("model_short", "MODEL", initial: "RE-COMPACT CNG"),
+    _FieldDef("inv_model", "ইনভয়েসের বিবরণে মডেল", initial: "RE-COMPACT LPG"),
+    _FieldDef("body_cls", "CLASS OF BODY", initial: "AUTO RICKSHAW"),
+    _FieldDef("cyl_cert", "NUMBER OF CYLINDER", initial: "1 (ONE)"),
+    _FieldDef("cc_cert", "CUBIC CAPACITY", initial: "198.88 CC"),
+    _FieldDef("hp_cert", "HORSE POWER", initial: "6.55 KW HP 5000RPM"),
+    _FieldDef("fuel_cert", "FUEL USED", initial: "Compact CNG/Petrol"),
+    _FieldDef("unladen_cert", "UNLADEN WEIGHT", initial: "398 KGS"),
+    _FieldDef("tyres_cert", "NUMBER OF TYRES", initial: "THREE WHEELER"),
+    _FieldDef("tyre_sz_cert", "SIZE OF TYRES", initial: "FRONT & REAR 4.00*8*4PR"),
+    _FieldDef("seats_cert", "SEATS (INCL. DRIVER)", initial: "4 (FOUR) PERSONS"),
+  ],
+  "কাগজের হেডার ও স্বাক্ষর": [
+    _FieldDef("hdr_on", "হেডার ছাপবেন? (হ্যাঁ / না) — প্যাডে আগে থেকে ছাপা থাকলে 'না'", initial: "হ্যাঁ"),
+    _FieldDef("hdr_logo", "লোগোর লেখা (ফাঁকা = লোগো নেই)", initial: "SB"),
+    _FieldDef("hdr_bn", "প্রতিষ্ঠানের নাম (বাংলা)", initial: "ইমাম মোটর্স"),
+    _FieldDef("hdr_en", "প্রতিষ্ঠানের নাম (ইংরেজি)", initial: "IMAM MOTORS"),
+    _FieldDef("hdr_addr", "ঠিকানা", initial: "1917, Nurjahan Mansion, Arakan Road, Panchlaish, Chattogram."),
+    _FieldDef("hdr_mob", "মোবাইল", initial: "Mobile : 01735-083366, 01754-293849"),
+    _FieldDef("hdr_brand", "ডান পাশের ব্র্যান্ড", initial: "RUNNER"),
+    _FieldDef("sign_for", "স্বাক্ষরের নিচে (For ...)", initial: "SB CORPORATION"),
   ],
 };
 
@@ -496,7 +567,8 @@ class _Shot {
   final Uint8List png;
   final int w;
   final int h;
-  const _Shot(this.png, this.w, this.h);
+  final String label;
+  const _Shot(this.png, this.w, this.h, [this.label = '']);
 }
 
 class BrtaPapersScreen extends StatefulWidget {
@@ -865,6 +937,7 @@ class _BrtaPapersScreenState extends State<BrtaPapersScreen>
             b: false,
             f: _F.bn,
             h: 1.9,
+            align: TextAlign.justify,
           ),
           const SizedBox(height: 60),
           Padding(
@@ -1184,6 +1257,7 @@ class _BrtaPapersScreenState extends State<BrtaPapersScreen>
             b: false,
             f: _F.bn,
             h: 1.9,
+            align: TextAlign.justify,
           ),
           const SizedBox(height: 70),
           Row(children: [sg("ক্রেতার স্বাক্ষর"), sg("বিক্রেতা প্রতিষ্ঠানের স্বাক্ষর/সীল")]),
@@ -1509,6 +1583,525 @@ class _BrtaPapersScreenState extends State<BrtaPapersScreen>
   }
 
   // =============================================================
+  // নমুনা PDF-এর ছাঁচে নতুন কাগজ
+  // =============================================================
+    bool get _showHeader {
+    final v = _g("hdr_on").trim().toLowerCase();
+    return !(v == "না" || v == "no" || v == "n" || v == "off" || v == "0");
+  }
+
+  Widget _header(_Pg p) {
+    if (!_showHeader) return const SizedBox(height: 146);
+    final logo = _g("hdr_logo");
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SizedBox(
+          height: 100,
+          child: Stack(
+            children: [
+              if (logo.isNotEmpty)
+                Positioned(
+                  left: 0,
+                  top: 16,
+                  child: Container(
+                    width: 66,
+                    height: 66,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: _ink,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text(
+                      logo,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 34,
+                        fontWeight: FontWeight.w900,
+                        fontStyle: FontStyle.italic,
+                      ),
+                    ),
+                  ),
+                ),
+              Positioned(
+                left: 0,
+                right: 0,
+                top: 0,
+                child: Column(
+                  children: [
+                    p.l(_g("hdr_bn"), size: 34, f: _F.bn),
+                    p.l(_g("hdr_en"), size: 31),
+                  ],
+                ),
+              ),
+              Positioned(
+                right: 0,
+                top: 2,
+                child: p.l(_g("hdr_brand"), size: 20, i: true, f: _F.sans),
+              ),
+            ],
+          ),
+        ),
+        Center(child: p.l(_g("hdr_addr"), size: 12.5, b: false)),
+        Center(child: p.l(_g("hdr_mob"), size: 12.5, b: false)),
+        const SizedBox(height: 14),
+      ],
+    );
+  }
+
+  Widget _nameBlock(_Pg p, {double size = 13.5}) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          p.l("${_v("c_name")} S/O: ${_v("c_father")}", size: size),
+          p.l("${_v("c_address")} .", size: size),
+        ],
+      );
+
+  Widget _refDate(_Pg p) => p.row([
+        Expanded(child: p.t("NO.${_g("gate_no")}", size: 12.5, b: false)),
+        p.t("DATE: ${_g("date").replaceAll('-', '/')}", size: 12.5),
+      ]);
+
+  Widget _signFor(_Pg p, {String? role, double gap = 56}) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          p.l("For ${_g("sign_for")}", size: 14),
+          SizedBox(height: gap),
+          if (role != null) p.l(role, size: 12.5),
+        ],
+      );
+
+  // ---------------- প্রত্যয়ন ----------------
+  _PD _certificateNew() {
+    final p = _Pg();
+    final price = _int("price");
+
+    Widget val(String s, {bool b = false}) => p.t(s, size: 13, b: b);
+
+    Widget hpWidget() {
+      final hp = _g("hp_cert");
+      final i = hp.toUpperCase().indexOf(" HP");
+      if (i <= 0) return val(hp, b: true);
+      p.buf.write('$hp  ');
+      return Text.rich(TextSpan(children: [
+        TextSpan(text: hp.substring(0, i), style: _st(13, b: true)),
+        TextSpan(text: hp.substring(i), style: _st(13, b: false)),
+      ]));
+    }
+
+    Widget it(String no, String label, Widget v, {bool colon = true}) => Padding(
+          padding: const EdgeInsets.symmetric(vertical: 2.2),
+          child: p.row(
+            [
+              SizedBox(width: 26, child: p.t(no, size: 12.5, b: false)),
+              SizedBox(width: 244, child: p.t(label, size: 12.5, b: false)),
+              SizedBox(width: 14, child: p.t(colon ? ":" : "", size: 13, b: false)),
+              Expanded(child: v),
+            ],
+            cross: CrossAxisAlignment.start,
+          ),
+        );
+
+    const enclosures = [
+      "1. REGISTRATION FORM",
+      "2. ORIGINAL SALES RECEIPT NO",
+      "3. ORIGINAL GATE PASS NO",
+      "4. INVOICE NO",
+      "5. PACKING LIST (WITH ENGINE & CHASSIS)",
+      "6. BILL OF LADING COPY",
+      "7. BILL OF ENTRY (WITH ASSES NOTICE) NO",
+      "8. L.C.A NO",
+      "9. L.C. NO",
+    ];
+
+    final w = Padding(
+      padding: const EdgeInsets.fromLTRB(48, 34, 48, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _header(p),
+          _refDate(p),
+          const SizedBox(height: 8),
+          p.l("TO", size: 12, b: false),
+          p.l("THE REGISTRATION AUTHORITY", size: 12, b: false),
+          p.l("MOTOR VEHICLE DEPARTMENT", size: 12, b: false),
+          const SizedBox(height: 10),
+          Center(child: p.l("TO WHOM IT MAY CONCERN", size: 17, i: true)),
+          const SizedBox(height: 6),
+          p.l("THIS IS TO CERTIFY THAT WE HAVE SOLD NEW VEHICLE TO:", size: 11.5, b: false),
+          const SizedBox(height: 8),
+          _nameBlock(p),
+          const SizedBox(height: 8),
+          p.l("THE SPECIFICATION OF THE THREE WHEELER DETAILED BELLOW: -", size: 12, b: false),
+          const SizedBox(height: 3),
+          it("1.", "BRAND", val(_g("brand"))),
+          it("2.", "MODEL", val(_g("model_short"))),
+          it("3.", "CLASS OF BODY", val(_g("body_cls"))),
+          it("4.", "CHASSIS NO.", val(_v("chassis"), b: true), colon: false),
+          it("5.", "ENGINE NO.", val(_v("engine"), b: true), colon: false),
+          it("6.", "COLOR", val(_g("color").toUpperCase())),
+          it("7.", "NUMBER OF CYLINDER", val(_g("cyl_cert"))),
+          it("8.", "CUBIC CAPACITY", val(_g("cc_cert"), b: true)),
+          it("9.", "HORSE POWER", hpWidget()),
+          it("10.", "FUEL USED", val(_g("fuel_cert"))),
+          it("11.", "YEAR OF MANUFACTURE", val(_g("year"), b: true)),
+          it("12.", "MAKERS NAME", val(_g("maker_short"))),
+          it("13.", "MAKERS COUNTRY", val(_g("maker_country"))),
+          it("14.", "UNLADEN WEIGHT", val(_g("unladen_cert"))),
+          it("15.", "NUMBER OF TYRES", val(_g("tyres_cert"))),
+          it("16.", "SIZE OF TYRES", val(_g("tyre_sz_cert"))),
+          it("17.", "SEATS (INCL. DRIVER)", val(_g("seats_cert"))),
+          it("18.", "WHEEL BASE", val(_g("wheelbase"))),
+          it(
+            "19.",
+            "UNIT PRICE",
+            val(price == null ? _dots : _inr(price, decimals: true), b: true),
+            colon: false,
+          ),
+          const SizedBox(height: 10),
+          p.l("WE ARE ENCLOSING HEREWITH THE FOLLOWING DOCUMENTS TOWARDS REGISTRATION",
+              size: 12, b: false),
+          const SizedBox(height: 2),
+          for (final e in enclosures)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 1),
+              child: p.l(e, size: 12, b: false),
+            ),
+          const SizedBox(height: 24),
+          p.row(
+            [
+              Padding(
+                padding: const EdgeInsets.only(top: 40),
+                child: p.t("OWNER’S SIGNATURE", size: 12.5, b: false),
+              ),
+              const Spacer(),
+              _signFor(p),
+            ],
+            cross: CrossAxisAlignment.start,
+          ),
+        ],
+      ),
+    );
+    return _page(p, w);
+  }
+
+  // ---------------- ডেলিভারি চালান ----------------
+  _PD _challanNew() {
+    final p = _Pg();
+    Widget val(String s, {bool b = false}) => p.t(s, size: 13, b: b);
+    Widget line(String l, Widget v, {bool colon = true}) => Container(
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          decoration: const BoxDecoration(
+            border: Border(bottom: BorderSide(color: Color(0xFF8A8A8A), width: 0.9)),
+          ),
+          child: p.row([
+            SizedBox(width: 280, child: p.t(l, size: 12.5, b: false)),
+            SizedBox(width: 14, child: p.t(colon ? ":" : "", size: 13, b: false)),
+            Expanded(child: v),
+          ]),
+        );
+    const note =
+        "Please received the undermentioned vehicles/with standard/extra tools with spare wheel and accessories on the following particulars.";
+
+    final w = Padding(
+      padding: const EdgeInsets.fromLTRB(48, 34, 48, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _header(p),
+          Center(child: p.l("DELIVERY CHALLAN", size: 17, i: true, u: true)),
+          const SizedBox(height: 8),
+          _refDate(p),
+          const SizedBox(height: 10),
+          _nameBlock(p),
+          const SizedBox(height: 12),
+          p.l(note, size: 9, b: false, u: true),
+          const SizedBox(height: 6),
+          line("1. CHASSIS NO.", val(_v("chassis"), b: true), colon: false),
+          line("2. ENGINE NO.", val(_v("engine"), b: true), colon: false),
+          line("3. MAKE & MODEL OF VEHICLE", val(_g("model_short"))),
+          line("4. YEAR OF MANUFACTURE", val(_g("year"), b: true)),
+          line("5. NO. OF CYLINDER WITH CC", val(_g("cyl_cert"))),
+          line("7. SEATING CAPACITY (INCL. DRIVER)", val(_g("seats_cert"))),
+          line("8. CLASS OF VEHICAL", val("${_g("tyres_cert")}, ${_g("body_cls")}")),
+          line("9. COLOR OF VEHICAL", val(_g("color").toUpperCase())),
+          line("10. SIZE OF TYRES", val(_g("tyre_sz_cert"))),
+          const SizedBox(height: 14),
+          Container(
+            height: 64,
+            padding: const EdgeInsets.fromLTRB(6, 4, 6, 4),
+            alignment: Alignment.topLeft,
+            decoration: BoxDecoration(border: Border.all(color: _ink, width: 1.6)),
+            child: p.t("REMARKS :", size: 13),
+          ),
+          const SizedBox(height: 3),
+          p.l(note, size: 8.5, b: false),
+          const SizedBox(height: 90),
+          p.row(
+            [
+              p.t("BUYER’S SIGNATURE", size: 12.5, b: false),
+              const Spacer(),
+              p.t("For ${_g("sign_for")}", size: 14),
+            ],
+            cross: CrossAxisAlignment.start,
+          ),
+        ],
+      ),
+    );
+    return _page(p, w);
+  }
+
+  // ---------------- সেলস ইনভয়েস (পোর্ট্রেট) ----------------
+  _PD _invoiceNew() {
+    final p = _Pg();
+    final price = _int("price");
+    final amount = price == null ? _dots : _inr(price, decimals: true);
+    const flex = [22, 11, 21, 17, 11, 18];
+    final border = BoxDecoration(border: Border.all(color: _ink, width: 1.1));
+
+    Widget c(int i, String s, double h, {double size = 10.5, bool b = false}) => Expanded(
+          flex: flex[i],
+          child: Container(
+            height: h,
+            alignment: Alignment.center,
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            decoration: border,
+            child: p.t(s, size: size, b: b, align: TextAlign.center),
+          ),
+        );
+
+    final desc = "BRAND : ${_g("brand")}\n"
+        "MODEL : ${_g("inv_model")}\n"
+        "CC : ${_g("cc_cert")}\n"
+        "${_g("tyres_cert")}";
+
+    final w = Padding(
+      padding: const EdgeInsets.fromLTRB(48, 34, 48, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _header(p),
+          Center(child: p.l("Sales Invoice", size: 18, u: true)),
+          const SizedBox(height: 8),
+          p.row([
+            Expanded(
+              child: p.t("Sales Invoice    NO.${_g("gate_no")}", size: 12, b: false),
+            ),
+            p.t("DATE: ${_g("date").replaceAll('-', '/')}", size: 12.5),
+          ]),
+          const SizedBox(height: 10),
+          _nameBlock(p),
+          const SizedBox(height: 14),
+          p.row([
+            c(0, "DESCRIPTION OF\nVEHICLE", 40, size: 9.5),
+            c(1, "MODEL", 40, size: 9.5),
+            c(2, "CHASSIS NUMBER", 40, size: 9.5),
+            c(3, "ENGINE NUMBER", 40, size: 9.5),
+            c(4, "COLOUR", 40, size: 9.5),
+            c(5, "PRICE\n(INTK)", 40, size: 9.5),
+          ]),
+          p.row([
+            c(0, desc, 330),
+            c(1, _g("model_short"), 330),
+            c(2, _g("chassis"), 330, size: 11, b: true),
+            c(3, _g("engine"), 330, size: 11, b: true),
+            c(4, _g("color").toUpperCase(), 330),
+            c(5, amount, 330, size: 11),
+          ]),
+          const SizedBox(height: 14),
+          p.row([
+            p.t("Amount in Words:  ", size: 12.5),
+            Expanded(
+              child: p.t(price == null ? _dots : _wordsTitle(price), size: 12.5, u: true),
+            ),
+          ]),
+          const SizedBox(height: 70),
+          p.row(
+            [
+              p.t("Prepared by", size: 13),
+              const Spacer(),
+              _signFor(p, role: "Sales Admin."),
+            ],
+            cross: CrossAxisAlignment.start,
+          ),
+        ],
+      ),
+    );
+    return _page(p, w);
+  }
+
+  // ---------------- গেট পাস ----------------
+  _PD _gateNew() {
+    final p = _Pg();
+    Widget cell(Widget child, double h) => Container(
+          height: h,
+          alignment: Alignment.center,
+          padding: const EdgeInsets.symmetric(horizontal: 4),
+          decoration: BoxDecoration(border: Border.all(color: _ink, width: 1.2)),
+          child: child,
+        );
+    Widget sg(String s) => Expanded(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6),
+            child: Column(
+              children: [
+                SizedBox(
+                  height: 2,
+                  width: double.infinity,
+                  child: CustomPaint(painter: _DashPainter()),
+                ),
+                const SizedBox(height: 4),
+                p.l(s, size: 15),
+              ],
+            ),
+          ),
+        );
+
+    final w = Padding(
+      padding: const EdgeInsets.fromLTRB(48, 34, 48, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _header(p),
+          Center(child: p.l("GATE PASS", size: 18, u: true)),
+          const SizedBox(height: 10),
+          _refDate(p),
+          const SizedBox(height: 12),
+          p.l("Receiver:", size: 13, b: false),
+          const SizedBox(height: 10),
+          _nameBlock(p),
+          const SizedBox(height: 26),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                flex: 68,
+                child: Column(
+                  children: [
+                    cell(p.t("Description", size: 14), 40),
+                    Row(children: [
+                      Expanded(child: cell(p.t("Chassis No.", size: 14), 52)),
+                      Expanded(child: cell(p.t("Engine No.", size: 14), 52)),
+                    ]),
+                    Row(children: [
+                      Expanded(child: cell(p.t(_g("chassis"), size: 12.5), 78)),
+                      Expanded(child: cell(p.t(_g("engine"), size: 12.5), 78)),
+                    ]),
+                  ],
+                ),
+              ),
+              Expanded(
+                flex: 32,
+                child: Column(
+                  children: [
+                    cell(p.t("Remarks", size: 14), 40),
+                    cell(const SizedBox(), 130),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 90),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [sg("Incharge"), sg("Driver’s Signature"), sg("Receiver’s Signature")],
+          ),
+        ],
+      ),
+    );
+    return _page(p, w);
+  }
+
+  // ---------------- আবেদন ফর্ম ২য় পাতা (Section-V, ৪০-৪৬) ----------------
+  _PD _application2New() {
+    final p = _Pg();
+    final a = _Abs(p, 927, 1288);
+    const z = 13.0;
+
+    a.t("Address :", 137, 108, size: z);
+    a.t("40.   Insurance Information :", 137, 133, size: z);
+    a.t("a)  Policy no :", 172, 155, size: z);
+    a.t("b)  Type of policy :", 352, 157, size: z);
+    a.t("c)  Insurer’s name & address :", 551, 156, size: z);
+    a.t("d)  Date of expiry :", 172, 178, size: z);
+    a.t("41.  Joint owner Information :", 137, 197, size: z);
+    a.t("a)  Name :", 172, 219, size: z);
+    a.t("b)  Name :", 527, 227, size: z);
+    a.t("Father/Husband :", 172, 245, size: z);
+    a.t("Father/Husband :", 300, 247, size: z);
+
+    a.c("Section-V", 281, size: 14.5, b: true);
+    a.c("(Declaration, Certificates and documents)", 305, size: 11.5);
+
+    a.t("42.   Declaration by owner :", 137, 318, size: z);
+    a.t("a)", 172, 342, size: 10.5);
+    a.t("I the undersigned do hereby declare that to the best of my knowledge and belief, the information",
+        198, 342, size: z);
+    a.t("b)", 172, 367, size: 10.5);
+    a.t("given and the documents enclosed (as per list attached) are true, I also declare that in case the",
+        198, 367, size: z);
+    a.t("paper/documents and information furnished are found to be incorrect at any state, I shall be liablefor",
+        198, 385, size: z);
+    a.t("legal action.", 198, 402, size: z);
+    a.t("Date :", 197, 419, size: z);
+    a.t("Encl : List of documents", 197, 443, size: z);
+    a.rt("Signature of owner", 841, 453, size: z);
+
+    a.t("43.   Registered dealer’s certificate :", 137, 483, size: z);
+    a.t("I the undersigned do hereby certify that the vehicle in question has been sold by me/my firm and the",
+        137, 506, size: z);
+    a.t("ownership documents attached with the application for registration for true. The information/specifications",
+        137, 528, size: z);
+    a.t("pertaining to the vehicle are correct and the vehicle complies with all the requirements of the registration.",
+        137, 549, size: z);
+    a.t("Date :", 197, 573, size: z);
+    a.t("Encl : List of documents", 197, 595, size: z);
+    a.t("Signature of registered dealer", 628, 625, size: z);
+    a.t("Seal", 720, 649, size: z);
+
+    a.t("44.   Certificate by the Inspector of Motor Vehicles :", 137, 662, size: z);
+    a.rich(
+      "Certified that the par ticulars pertaining to the owner and the vechicle chassis No",
+      [
+        TextSpan(
+          text: "Certified that the par ticulars pertaining to the owner and the vechicle ",
+          style: _st(z, b: false),
+        ),
+        TextSpan(text: "chassis No", style: _st(z, b: true)),
+      ],
+      137,
+      694,
+      size: z,
+    );
+    a.t("Engine", 779, 702, size: z, b: true);
+    a.t("No.", 137, 732, size: z, b: true);
+    a.t("given in the application match with the owner ship documents attached to this application Its is",
+        205, 732, size: z);
+    a.t("further certified that the vehicle complies with the registration requirements specified in the MV Act and the",
+        137, 760, size: z);
+    a.t("Rules and / or Regulations made there under and the vehicle is not", 137, 788, size: z);
+    a.t("mechanically defective. The necessary documents/papers are available as per list enclosed.",
+        137, 817, size: z);
+    a.t("Date :", 137, 832, size: z);
+    a.t("Encl : List of documents", 137, 857, size: z);
+    a.t("Signature of Inspector of Motor Vehicles official Seal", 506, 898, size: z);
+
+    a.t("45.   Registration Status ;", 137, 916, size: z);
+    a.t("Registration allowed/not allowed", 169, 942, size: z);
+    a.t("Signature of Registering Authority Seal.", 593, 970, size: z);
+
+    a.t("46.   Fees and Tax Accounts :", 137, 985, size: z);
+    _dotLine(a, "Necessary fees and taxes amounting to take", "has been paid to", 137, 845, 1017, z);
+    _dotLine(a, "P.O/Bank", "vide vouchers and receipts enclosed.", 137, 657, 1045, z);
+    a.t("Signature of owner", 137, 1086, size: z);
+    a.t("or his representative", 137, 1106, size: z);
+    a.t("Signature of dealing assistant.", 659, 1092, size: z);
+    a.t("Counter Signature by the registering authority.", 333, 1132, size: z);
+    return _page(p, a.build());
+  }
+  
+
+  // =============================================================
   // PDF / প্রিন্ট — পর্দার কাগজের ছবি তুলে PDF-এ বসানো হয়, তাই বাংলা যুক্তাক্ষর ঠিক থাকে
   // =============================================================
   Future<_Shot?> _capture(int i) async {
@@ -1520,7 +2113,7 @@ class _BrtaPapersScreenState extends State<BrtaPapersScreen>
       final img = await ro.toImage(pixelRatio: 2.5);
       final bd = await img.toByteData(format: ui.ImageByteFormat.png);
       if (bd == null) return null;
-      return _Shot(bd.buffer.asUint8List(), img.width, img.height);
+      return _Shot(bd.buffer.asUint8List(), img.width, img.height, _paperTitles[i]);
     } catch (_) {
       return null;
     }
@@ -1687,21 +2280,21 @@ class _BrtaPapersScreenState extends State<BrtaPapersScreen>
       "মালিকের তথ্য",
       "গেট পাস",
     ];
-    final docs = [
-      _certificate(),
-      _invoice(),
+      final docs = [
+      _certificateNew(),
+      _invoiceNew(),
       _undertaking(),
       _application(),
-      _application2(),
+      _application2New(),
       _declaration(),
-      _challan(),
+      _challanNew(),
       _owner(),
-      _gate(),
+      _gateNew(),
     ];
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text("BRTA কাগজপত্র"),
+      title: const Text("BRTA কাগজপত্র — নতুন ছাঁচ"),
         actions: [
           IconButton(
             tooltip: "সব কাগজ একসাথে PDF / প্রিন্ট",
@@ -1757,7 +2350,66 @@ class _BrtaPapersScreenState extends State<BrtaPapersScreen>
   }
 }
 
-/// PDF দেখা, ইচ্ছেমতো মার্জিন বেছে প্রিন্ট ও সেভ/শেয়ার করার পাতা
+/// প্রতিটি কাগজের নিজস্ব প্রিন্ট সেটিং (মিলিমিটারে)
+class _PageSetup {
+  double top;
+  double bottom;
+  double left;
+  double right;
+  double dx; // ডানে (+) / বামে (−)
+  double dy; // নিচে (+) / উপরে (−)
+  bool shift; // true = মাপ ঠিক রেখে শুধু সরান, false = মার্জিনের ভেতরে আঁটান
+  bool center;
+
+  _PageSetup({
+    this.top = 0,
+    this.bottom = 0,
+    this.left = 0,
+    this.right = 0,
+    this.dx = 0,
+    this.dy = 0,
+    this.shift = true,
+    this.center = true,
+  });
+
+  _PageSetup copy() => _PageSetup(
+        top: top,
+        bottom: bottom,
+        left: left,
+        right: right,
+        dx: dx,
+        dy: dy,
+        shift: shift,
+        center: center,
+      );
+
+  Map<String, dynamic> toJson() => {
+        'top': top,
+        'bottom': bottom,
+        'left': left,
+        'right': right,
+        'dx': dx,
+        'dy': dy,
+        'shift': shift,
+        'center': center,
+      };
+
+  factory _PageSetup.fromJson(Map<String, dynamic> j) {
+    double d(String k) => (j[k] is num) ? (j[k] as num).toDouble() : 0;
+    return _PageSetup(
+      top: d('top'),
+      bottom: d('bottom'),
+      left: d('left'),
+      right: d('right'),
+      dx: d('dx'),
+      dy: d('dy'),
+      shift: j['shift'] != false,
+      center: j['center'] != false,
+    );
+  }
+}
+
+/// PDF দেখা, প্রতিটি কাগজের আলাদা মার্জিন/সরানো বেছে প্রিন্ট ও সেভ/শেয়ার করার পাতা
 class _PdfViewScreen extends StatefulWidget {
   final List<_Shot> shots;
   final String name;
@@ -1769,152 +2421,281 @@ class _PdfViewScreen extends StatefulWidget {
 }
 
 class _PdfViewScreenState extends State<_PdfViewScreen> {
-  // মিলিমিটারে। static রাখা হয়েছে যাতে অ্যাপ চালু থাকা অবস্থায় পরেরবারও একই মার্জিন থাকে
-  static double _top = 0;
-  static double _bottom = 0;
-  static double _left = 0;
-  static double _right = 0;
-  static bool _center = true;
+  static const String _prefKey = 'brta_print_setup';
 
+  final Map<String, _PageSetup> _setup = {};
+  int _sel = 0;
   bool _panel = true;
-  int _gen = 0; // মার্জিন বদলালে প্রিভিউ নতুন করে তৈরি করার জন্য
+  bool _loaded = false;
+  int _gen = 0; // সেটিং বদলালে প্রিভিউ নতুন করে তৈরি করার জন্য
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSetup();
+  }
+
+  _PageSetup _of(int i) => _setup.putIfAbsent(widget.shots[i].label, () => _PageSetup());
+
+  Future<void> _loadSetup() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      final m = jsonDecode(p.getString(_prefKey) ?? '{}') as Map<String, dynamic>;
+      m.forEach((k, v) {
+        _setup[k] = _PageSetup.fromJson(Map<String, dynamic>.from(v as Map));
+      });
+    } catch (_) {}
+    if (!mounted) return;
+    setState(() {
+      _loaded = true;
+      _gen++;
+    });
+  }
+
+  Future<void> _saveSetup() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setString(
+        _prefKey,
+        jsonEncode({for (final e in _setup.entries) e.key: e.value.toJson()}),
+      );
+    } catch (_) {}
+  }
 
   double _fit(double v, double max) => v < 50 ? 50 : (v > max ? max : v);
 
   Future<Uint8List> _build(PdfPageFormat _) async {
     const mm = PdfPageFormat.mm;
     final doc = pw.Document();
-    for (final s in widget.shots) {
+    for (var i = 0; i < widget.shots.length; i++) {
+      final s = widget.shots[i];
+      final c = _of(i);
       final fmt = s.w > s.h ? PdfPageFormat.a4.landscape : PdfPageFormat.a4;
-      final availW = _fit(fmt.width - (_left + _right) * mm, fmt.width);
-      final availH = _fit(fmt.height - (_top + _bottom) * mm, fmt.height);
-      final kw = availW / s.w;
-      final kh = availH / s.h;
-      final k = kw < kh ? kw : kh; // অনুপাত ঠিক রেখে বেছে নেওয়া এলাকায় আঁটানো
       final image = pw.MemoryImage(s.png);
-      doc.addPage(
-        pw.Page(
-          pageFormat: fmt,
-          margin: pw.EdgeInsets.zero,
-          build: (_) => pw.Padding(
-            padding: pw.EdgeInsets.fromLTRB(_left * mm, _top * mm, _right * mm, _bottom * mm),
-            child: pw.Align(
-              alignment: _center ? pw.Alignment.center : pw.Alignment.topLeft,
-              child: pw.Image(image, width: s.w * k, height: s.h * k, fit: pw.BoxFit.fill),
+
+      if (c.shift) {
+        // মাপ ঠিক থাকে, পুরো কাগজ ডানে/নিচে সরে (কিনারার বাইরের অংশ কাটা পড়ে)
+        doc.addPage(
+          pw.Page(
+            pageFormat: fmt,
+            margin: pw.EdgeInsets.zero,
+            build: (_) => pw.Stack(
+              fit: pw.StackFit.expand,
+              children: [
+                pw.Positioned(
+                  left: c.dx * mm,
+                  top: c.dy * mm,
+                  child: pw.Image(image, width: fmt.width, height: fmt.height, fit: pw.BoxFit.fill),
+                ),
+              ],
             ),
           ),
-        ),
-      );
+        );
+      } else {
+        final availW = _fit(fmt.width - (c.left + c.right) * mm, fmt.width);
+        final availH = _fit(fmt.height - (c.top + c.bottom) * mm, fmt.height);
+        final kw = availW / s.w;
+        final kh = availH / s.h;
+        final k = kw < kh ? kw : kh; // অনুপাত ঠিক রেখে মার্জিনের ভেতরে আঁটানো
+        doc.addPage(
+          pw.Page(
+            pageFormat: fmt,
+            margin: pw.EdgeInsets.zero,
+            build: (_) => pw.Padding(
+              padding: pw.EdgeInsets.fromLTRB(c.left * mm, c.top * mm, c.right * mm, c.bottom * mm),
+              child: pw.Align(
+                alignment: c.center ? pw.Alignment.center : pw.Alignment.topLeft,
+                child: pw.Image(image, width: s.w * k, height: s.h * k, fit: pw.BoxFit.fill),
+              ),
+            ),
+          ),
+        );
+      }
     }
     return doc.save();
   }
 
-  Widget _slider(String label, double value, void Function(double) set) {
+  void _changed() {
+    _saveSetup();
+    setState(() => _gen++);
+  }
+
+  void _resetThis() {
+    _setup[widget.shots[_sel].label] = _PageSetup();
+    _changed();
+  }
+
+  void _applyToAll() {
+    final c = _of(_sel);
+    for (var i = 0; i < widget.shots.length; i++) {
+      _setup[widget.shots[i].label] = c.copy();
+    }
+    _changed();
+  }
+
+  Widget _slider(String label, double value, double min, double max, void Function(double) set,
+      {double labelW = 56}) {
+    final v = value.clamp(min, max).toDouble();
     return SizedBox(
-      width: 300,
+      width: 330,
       child: Row(
         children: [
-          SizedBox(width: 56, child: Text(label)),
+          SizedBox(width: labelW, child: Text(label, style: const TextStyle(fontSize: 13))),
           Expanded(
             child: Slider(
-              value: value,
-              min: 0,
-              max: 60,
-              divisions: 60,
-              label: "${value.round()} মিমি",
+              value: v,
+              min: min,
+              max: max,
+              divisions: ((max - min) * 2).round(),
+              label: "${v.toStringAsFixed(1)} মিমি",
               onChanged: (x) => setState(() => set(x)),
-              onChangeEnd: (_) => setState(() => _gen++),
+              onChangeEnd: (_) => _changed(),
             ),
           ),
-          SizedBox(width: 52, child: Text("${value.round()} মিমি", style: const TextStyle(fontSize: 12))),
+          SizedBox(
+            width: 58,
+            child: Text("${v.toStringAsFixed(1)} মিমি", style: const TextStyle(fontSize: 12)),
+          ),
         ],
       ),
     );
   }
 
-  void _reset() {
-    setState(() {
-      _top = 0;
-      _bottom = 0;
-      _left = 0;
-      _right = 0;
-      _center = true;
-      _gen++;
-    });
-  }
+  String _chipLabel(int i) =>
+      widget.shots[i].label.isEmpty ? "পাতা ${i + 1}" : widget.shots[i].label;
 
   @override
   Widget build(BuildContext context) {
+    final multi = widget.shots.length > 1;
+    final c = _of(_sel);
+
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.name),
         actions: [
           IconButton(
-            tooltip: _panel ? "মার্জিনের অপশন লুকান" : "মার্জিনের অপশন দেখান",
+            tooltip: _panel ? "সেটিং লুকান" : "মার্জিন / সরানোর সেটিং",
             icon: Icon(_panel ? Icons.expand_less : Icons.tune),
             onPressed: () => setState(() => _panel = !_panel),
           ),
         ],
       ),
-      body: Column(
-        children: [
-          if (_panel)
-            Container(
-              width: double.infinity,
-              color: Colors.grey.shade100,
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-              child: Wrap(
-                spacing: 24,
-                runSpacing: 0,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: [
-                  _slider("উপরে", _top, (x) => _top = x),
-                  _slider("নিচে", _bottom, (x) => _bottom = x),
-                  _slider("বামে", _left, (x) => _left = x),
-                  _slider("ডানে", _right, (x) => _right = x),
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      ChoiceChip(
-                        label: const Text("মাঝখানে"),
-                        selected: _center,
-                        onSelected: (_) => setState(() {
-                          _center = true;
-                          _gen++;
-                        }),
-                      ),
-                      const SizedBox(width: 8),
-                      ChoiceChip(
-                        label: const Text("উপরে-বামে"),
-                        selected: !_center,
-                        onSelected: (_) => setState(() {
-                          _center = false;
-                          _gen++;
-                        }),
-                      ),
-                      const SizedBox(width: 8),
-                      TextButton.icon(
-                        onPressed: _reset,
-                        icon: const Icon(Icons.restart_alt, size: 18),
-                        label: const Text("রিসেট"),
-                      ),
-                    ],
+      body: !_loaded
+          ? const Center(child: CircularProgressIndicator())
+          : Column(
+              children: [
+                if (_panel)
+                  Container(
+                    width: double.infinity,
+                    color: Colors.grey.shade100,
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (multi) ...[
+                          const Text("কোন কাগজের সেটিং বদলাবেন:",
+                              style: TextStyle(fontWeight: FontWeight.bold)),
+                          const SizedBox(height: 4),
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 4,
+                            children: [
+                              for (var i = 0; i < widget.shots.length; i++)
+                                ChoiceChip(
+                                  label: Text(_chipLabel(i)),
+                                  selected: _sel == i,
+                                  onSelected: (_) => setState(() => _sel = i),
+                                ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                        ],
+                        Wrap(
+                          spacing: 8,
+                          children: [
+                            ChoiceChip(
+                              label: const Text("মাপ ঠিক রেখে সরান"),
+                              selected: c.shift,
+                              onSelected: (_) {
+                                c.shift = true;
+                                _changed();
+                              },
+                            ),
+                            ChoiceChip(
+                              label: const Text("মার্জিনের ভেতরে আঁটান"),
+                              selected: !c.shift,
+                              onSelected: (_) {
+                                c.shift = false;
+                                _changed();
+                              },
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                        Wrap(
+                          spacing: 16,
+                          children: c.shift
+                              ? [
+                                  _slider("ডানে(+) বামে(−)", c.dx, -30, 30, (x) => c.dx = x, labelW: 110),
+                                  _slider("নিচে(+) উপরে(−)", c.dy, -30, 30, (x) => c.dy = x, labelW: 110),
+                                ]
+                              : [
+                                  _slider("উপরে", c.top, 0, 60, (x) => c.top = x),
+                                  _slider("নিচে", c.bottom, 0, 60, (x) => c.bottom = x),
+                                  _slider("বামে", c.left, 0, 60, (x) => c.left = x),
+                                  _slider("ডানে", c.right, 0, 60, (x) => c.right = x),
+                                ],
+                        ),
+                        Wrap(
+                          spacing: 8,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            if (!c.shift) ...[
+                              ChoiceChip(
+                                label: const Text("মাঝখানে"),
+                                selected: c.center,
+                                onSelected: (_) {
+                                  c.center = true;
+                                  _changed();
+                                },
+                              ),
+                              ChoiceChip(
+                                label: const Text("উপরে-বামে"),
+                                selected: !c.center,
+                                onSelected: (_) {
+                                  c.center = false;
+                                  _changed();
+                                },
+                              ),
+                            ],
+                            TextButton.icon(
+                              onPressed: _resetThis,
+                              icon: const Icon(Icons.restart_alt, size: 18),
+                              label: const Text("এই কাগজ রিসেট"),
+                            ),
+                            if (multi)
+                              TextButton.icon(
+                                onPressed: _applyToAll,
+                                icon: const Icon(Icons.copy_all, size: 18),
+                                label: const Text("সব কাগজে এই মান"),
+                              ),
+                          ],
+                        ),
+                      ],
+                    ),
                   ),
-                ],
-              ),
+                Expanded(
+                  child: PdfPreview(
+                    key: ValueKey(_gen),
+                    build: _build,
+                    pdfFileName: "BRTA_papers.pdf",
+                    canChangeOrientation: false,
+                    canChangePageFormat: false,
+                    canDebug: false,
+                  ),
+                ),
+              ],
             ),
-          Expanded(
-            child: PdfPreview(
-              key: ValueKey(_gen),
-              build: _build,
-              pdfFileName: "BRTA_papers.pdf",
-              canChangeOrientation: false,
-              canChangePageFormat: false,
-              canDebug: false,
-            ),
-          ),
-        ],
-      ),
     );
   }
 }

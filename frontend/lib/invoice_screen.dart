@@ -7,6 +7,7 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'challan_copy.dart';
 
 // report_pdf.dart এই নামটা ব্যবহার করে, তাই রাখা হয়েছে
 const String companyName = "ইমাম মোটর্স";
@@ -187,6 +188,9 @@ class InvoiceScreen extends StatefulWidget {
 
   /// true হলে দর, টাকা, মোট, অগ্রিম, বাকি ফাঁকা থাকবে (স্টক ট্রান্সফারের মেমোর জন্য)
   final bool hideAmounts;
+  /// for printing the vehicle's challan copy together with the sales invoice
+  final int? challanUnitId;
+  final String? token;
 
   const InvoiceScreen({
     super.key,
@@ -210,6 +214,8 @@ class InvoiceScreen extends StatefulWidget {
     this.productName,
     this.note,
     this.hideAmounts = false,
+    this.challanUnitId,
+    this.token,
   });
 
   @override
@@ -227,6 +233,9 @@ class _InvoiceScreenState extends State<InvoiceScreen> {
   Color _accent = const Color(0xFF000000);
   bool _loading = true;
   bool _busy = false;
+  bool _withChallan = true;
+  bool _noHeader = false;
+  bool _transferMode = false;
 
   String get _key => widget.storageKey ?? "inv_${widget.invoiceTitle}_${widget.invoiceNumber}";
 
@@ -323,7 +332,27 @@ class _InvoiceScreenState extends State<InvoiceScreen> {
       await p.setString('memo_$_key', jsonEncode(m));
     } catch (_) {}
   }
-
+  void _toggleTransfer() {
+    const amountKeys = [
+      'rate', 'taka', 'total', 'advance', 'due',
+      'x1r', 'x1t', 'x2r', 'x2t', 'x3r', 'x3t',
+    ];
+    setState(() {
+      _transferMode = !_transferMode;
+      if (_transferMode) {
+        _v['note'] = 'উক্ত গাড়িটি শোরুম থেকে শোরুমে পাঠানো হলো';
+        for (final k in amountKeys) {
+          _v[k] = '';
+        }
+      } else {
+        final fresh = _initialValues();
+        for (final k in amountKeys) {
+          _v[k] = fresh[k] ?? '';
+        }
+        _v['note'] = 'ধন্যবাদ';
+      }
+    });
+  }
   Future<void> _edit() async {
     final res = await Navigator.of(context).push<_EditResult>(
       MaterialPageRoute(
@@ -357,6 +386,30 @@ class _InvoiceScreenState extends State<InvoiceScreen> {
           build: (_) => pw.Image(image, fit: pw.BoxFit.fill),
         ),
       );
+      if (_withChallan && widget.challanUnitId != null && widget.token != null) {
+        final pages = await loadChallanPages(widget.token!, widget.challanUnitId!);
+        if (pages.isEmpty) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text("এই গাড়ীর চালানের কপি পাওয়া যায়নি, শুধু ইনভয়েস প্রিন্ট হচ্ছে"),
+              ),
+            );
+          }
+        } else {
+          for (final cp in pages) {
+            final fmt = cp.w > cp.h ? PdfPageFormat.a4.landscape : PdfPageFormat.a4;
+            final chImage = pw.MemoryImage(cp.png);
+            doc.addPage(
+              pw.Page(
+                pageFormat: fmt,
+                margin: const pw.EdgeInsets.all(20),
+                build: (_) => pw.Center(child: pw.Image(chImage, fit: pw.BoxFit.contain)),
+              ),
+            );
+          }
+        }
+      }
       final Uint8List bytes = await doc.save();
       if (!mounted) return;
       await Navigator.of(context).push(
@@ -734,7 +787,7 @@ class _InvoiceScreenState extends State<InvoiceScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              _header(),
+            if (!_noHeader) _header(),
               _topInfo(),
               const SizedBox(height: 14),
               Expanded(child: _table()),
@@ -750,9 +803,37 @@ class _InvoiceScreenState extends State<InvoiceScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFE9EDF3),
+      bottomNavigationBar: widget.challanUnitId == null
+          ? null
+          : Material(
+              color: Colors.white,
+              child: SafeArea(
+                child: CheckboxListTile(
+                  dense: true,
+                  value: _withChallan,
+                  onChanged: (v) => setState(() => _withChallan = v ?? true),
+                  title: const Text("PDF/প্রিন্টে চালানের কপিও জুড়ুন"),
+                  controlAffinity: ListTileControlAffinity.leading,
+                ),
+              ),
+            ),
       appBar: AppBar(
         title: Text(widget.invoiceTitle),
         actions: [
+            TextButton(
+            onPressed: _loading ? null : () => setState(() => _noHeader = !_noHeader),
+            child: Text(
+              _noHeader ? "হেডার সহ" : "হেডার ছাড়া",
+              style: const TextStyle(color: Colors.white),
+            ),
+          ),
+          TextButton(
+            onPressed: _loading ? null : _toggleTransfer,
+            child: Text(
+              _transferMode ? "কাস্টমার এর কাছে বিক্রয়" : "শোরুম ট্রান্সফার",
+              style: const TextStyle(color: Colors.white),
+            ),
+          ),
           IconButton(
             tooltip: "এডিট (লেখা, টাকা, রঙ, সব কিছু)",
             icon: const Icon(Icons.edit),
